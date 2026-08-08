@@ -9,10 +9,8 @@ const STORAGE_ROOT = process.env.STORAGE_ROOT
     ? path.resolve(process.env.STORAGE_ROOT) 
     : path.resolve(__dirname, '../../storage');
 
-// Helper to safely resolve and validate paths
 const getSafePath = (userPath) => {
     const targetPath = path.resolve(STORAGE_ROOT, userPath || '');
-    // Crucial Security: Ensure the resolved path starts with the designated root
     if (!targetPath.startsWith(STORAGE_ROOT)) {
         throw new Error('Access denied: Path out of bounds');
     }
@@ -26,7 +24,6 @@ router.get('/', authenticateToken, async (req, res) => {
         
         const relativePath = req.query.path || '';
         const targetPath = getSafePath(relativePath);
-        await fs.mkdir(targetPath, { recursive: true });
 
         const items = await fs.readdir(targetPath, { withFileTypes: true });
         
@@ -55,7 +52,7 @@ router.post('/folder', authenticateToken, async (req, res) => {
         if (!folderName) return res.status(400).json({ error: 'Folder name required' });
 
         const newFolderPath = getSafePath(path.join(currentPath || '', folderName));
-        await fs.mkdir(newFolderPath, { recursive: true });
+        await fs.mkdir(newFolderPath);
         res.status(201).json({ message: 'Folder created' });
     } catch (error) {
         res.status(500).json({ error: 'Failed to create folder' });
@@ -70,11 +67,43 @@ router.post('/text', authenticateToken, async (req, res) => {
 
         const safeFileName = fileName.endsWith('.txt') ? fileName : `${fileName}.txt`;
         const newFilePath = getSafePath(path.join(currentPath || '', safeFileName));
-        await fs.mkdir(path.dirname(newFilePath), { recursive: true });
-        await fs.writeFile(newFilePath, 'New empty text file.', 'utf8');
+        
+        await fs.writeFile(newFilePath, '', 'utf8');
         res.status(201).json({ message: 'File created' });
     } catch (error) {
         res.status(500).json({ error: 'Failed to create file' });
+    }
+});
+
+// GET /api/files/read?path=...
+router.get('/read', authenticateToken, async (req, res) => {
+    try {
+        const relativePath = req.query.path;
+        if (!relativePath) return res.status(400).json({ error: 'Path required' });
+
+        const targetPath = getSafePath(relativePath);
+        
+        const content = await fs.readFile(targetPath, 'utf8');
+        res.json({ content });
+    } catch (error) {
+        console.error('Read file error:', error);
+        res.status(500).json({ error: 'Failed to read file contents' });
+    }
+});
+
+// PUT /api/files/update
+router.put('/update', authenticateToken, async (req, res) => {
+    try {
+        const { filePath, content } = req.body;
+        if (!filePath) return res.status(400).json({ error: 'File path required' });
+
+        const targetPath = getSafePath(filePath);
+        
+        await fs.writeFile(targetPath, content || '', 'utf8');
+        res.json({ message: 'File saved successfully' });
+    } catch (error) {
+        console.error('Save file error:', error);
+        res.status(500).json({ error: 'Failed to save file' });
     }
 });
 
