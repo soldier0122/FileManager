@@ -1,16 +1,21 @@
 import { useState, useEffect } from 'react';
 import RegisterForm from './components/RegisterForm';
 import LoginForm from './components/LoginForm';
-import './App.css';
+import Dashboard from './components/Dashboard';
+import './App.css'; 
 
 function App() {
-  const [appState, setAppState] = useState('loading'); // 'loading', 'register', 'login', 'dashboard'
+  const [appState, setAppState] = useState('loading'); 
   
   useEffect(() => {
-    // Check if the app needs initial setup
-    fetch('http://localhost:3000/api/auth/setup-status')
-      .then(res => res.json())
-      .then(data => {
+    fetch('/api/auth/setup-status')
+      .then(async (res) => {
+        const text = await res.text();
+        if (!res.ok) {
+          throw new Error(text || 'Backend request failed');
+        }
+        const data = JSON.parse(text);
+
         if (data.needsSetup) {
           setAppState('register');
         } else {
@@ -28,11 +33,25 @@ function App() {
       });
   }, []);
 
+  const handleLogout = () => {
+    localStorage.removeItem('vps_token');
+    setAppState('login');
+  };
+
   if (appState === 'loading') return <div>Connecting to server...</div>;
   if (appState === 'error') return <div>Error connecting to the backend. Is it running?</div>;
 
+  // We remove the standard app-container wrapper ONLY for the dashboard so it can grow wider
+  if (appState === 'dashboard') {
+    return (
+      <div className="app-container" style={{ maxWidth: '800px' }}>
+        <Dashboard onLogout={handleLogout} />
+      </div>
+    );
+  }
+
   return (
-    <div style={{ padding: '20px', fontFamily: 'sans-serif' }}>
+    <div className="app-container">
       {appState === 'register' && 
         <div>
           <h2>Initial Setup</h2>
@@ -47,19 +66,8 @@ function App() {
           <LoginForm onLogin={() => setAppState('dashboard')} />
         </div>
       }
-
-      {appState === 'dashboard' && 
-        <div>
-          <h2>File Manager Dashboard</h2>
-          <p>You are logged in! The file system will go here.</p>
-          <button onClick={() => {
-              localStorage.removeItem('vps_token');
-              setAppState('login');
-          }}>Log Out</button>
-        </div>
-      }
     </div>
-  )
+  );
 }
 
 export default App;

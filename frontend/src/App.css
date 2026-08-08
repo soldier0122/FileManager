@@ -99,3 +99,96 @@ button:disabled {
   font-size: 0.85rem;
   border: 1px solid rgba(207, 102, 121, 0.3);
 }
+
+.dashboard-container {
+  width: 100%;
+  text-align: left;
+}
+
+.dashboard-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 20px;
+}
+
+.logout-btn {
+  width: auto;
+  padding: 8px 16px;
+  background-color: transparent;
+  border: 1px solid var(--border-color);
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+}
+
+.logout-btn:hover {
+  background-color: rgba(255, 255, 255, 0.05);
+  color: var(--text-primary);
+}
+
+.path-display {
+  background-color: #1a1a20;
+  padding: 12px;
+  border-radius: 6px;
+  border: 1px solid var(--border-color);
+  margin-bottom: 24px;
+  font-size: 0.85rem;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.path-label {
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  font-size: 0.75rem;
+  letter-spacing: 0.5px;
+}
+
+.path-value {
+  color: var(--accent-color);
+  word-break: break-all;
+  font-family: monospace;
+}
+
+.file-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.file-item {
+  display: flex;
+  align-items: center;
+  padding: 12px;
+  background-color: #2a2a35;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  transition: all 0.2s ease;
+  cursor: pointer;
+}
+
+.file-item:hover {
+  background-color: #32323e;
+  border-color: var(--border-color);
+}
+
+.file-icon {
+  font-size: 1.2rem;
+  margin-right: 12px;
+}
+
+.file-name {
+  color: var(--text-primary);
+  font-size: 0.95rem;
+  user-select: none;
+}
+
+.empty-state, .loading-state {
+  text-align: center;
+  padding: 30px;
+  color: var(--text-secondary);
+  background-color: #1a1a20;
+  border-radius: 8px;
+  border: 1px dashed var(--border-color);
+}
