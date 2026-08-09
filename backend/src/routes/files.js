@@ -1,3 +1,6 @@
+const multer = require('multer');
+const os = require('os');
+const upload = multer({ dest: os.tmpdir() });
 const { ZipArchive } = require('archiver');
 const express = require('express');
 const fs = require('fs/promises');
@@ -241,6 +244,29 @@ router.put('/move', authenticateToken, async (req, res) => {
     } catch (error) {
         console.error('Move error:', error);
         res.status(500).json({ error: 'Failed to move item' });
+    }
+});
+
+// POST /api/files/upload
+router.post('/upload', authenticateToken, upload.array('files'), async (req, res) => {
+    try {
+        // currentPath is sent as a text field alongside the files
+        const currentPath = req.body.currentPath || '';
+        const targetDir = getSafePath(currentPath);
+        
+        await fs.mkdir(targetDir, { recursive: true });
+
+        // Loop through all uploaded files and move them from the temp folder to storage
+        for (const file of req.files) {
+            const destPath = getSafePath(path.join(currentPath, file.originalname));
+            await fs.copyFile(file.path, destPath);
+            await fs.unlink(file.path); // Clean up the temp file
+        }
+        
+        res.status(200).json({ message: 'Files uploaded successfully' });
+    } catch (error) {
+        console.error('Upload error:', error);
+        res.status(500).json({ error: 'Failed to upload files' });
     }
 });
 

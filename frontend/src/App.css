@@ -424,3 +424,11 @@ button:disabled {
   background-color: #3b3b4f;
   border-color: var(--text-primary, #fff);
 }
+
+/* Grid Drop Zone */
+.file-grid.drag-over {
+  background-color: rgba(255, 255, 255, 0.03);
+  border: 2px dashed var(--accent-color);
+  border-radius: 8px;
+  min-height: 200px;
+}

@@ -1,17 +1,14 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import Editor from '@monaco-editor/react';
 
-// --- File Extension Helper ---
 const getFileInfo = (filename) => {
   const ext = filename.split('.').pop().toLowerCase();
-  
   if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg'].includes(ext)) return { type: 'image', icon: '🖼️' };
   if (['mp4', 'webm', 'mkv', 'avi'].includes(ext)) return { type: 'video', icon: '🎥' };
   if (['mp3', 'wav', 'ogg'].includes(ext)) return { type: 'audio', icon: '🎵' };
   if (['zip', 'rar', 'tar', 'gz', '7z'].includes(ext)) return { type: 'archive', icon: '📦' };
   if (['pdf'].includes(ext)) return { type: 'pdf', icon: '📕' };
   if (['js', 'jsx', 'ts', 'tsx', 'py', 'json', 'html', 'css', 'lua'].includes(ext)) return { type: 'code', icon: '📝' };
-  
   return { type: 'text', icon: '📄' };
 };
 
@@ -20,17 +17,18 @@ export default function Dashboard({ onLogout }) {
   const [currentPath, setCurrentPath] = useState(() => sessionStorage.getItem('vps_currentPath') || '');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
+  const [isUploading, setIsUploading] = useState(false);
 
   const [editorState, setEditorState] = useState({ isOpen: false, filePath: '', content: '', isSaving: false });
   const [mediaViewer, setMediaViewer] = useState({ isOpen: false, url: '', filename: '', type: '', isBlob: false });
-  
   const [modal, setModal] = useState({ isOpen: false, type: '', input: '', error: '', targetPath: '' });
   const [clipboard, setClipboard] = useState(null);
   const [contextMenu, setContextMenu] = useState({ visible: false, x: 0, y: 0, file: null });
 
-  // Drag and Drop States
   const [draggedItem, setDraggedItem] = useState(null);
   const [dragOverTarget, setDragOverTarget] = useState(null);
+  
+  const fileInputRef = useRef(null);
 
   useEffect(() => {
     sessionStorage.setItem('vps_currentPath', currentPath);
@@ -50,12 +48,10 @@ export default function Dashboard({ onLogout }) {
       const token = localStorage.getItem('vps_token');
       const response = await fetch(`/api/files?path=${encodeURIComponent(path)}`, { headers: { 'Authorization': `Bearer ${token}` } });
       if (response.status === 401 || response.status === 403) return onLogout();
-
       const rawText = await response.text();
       let data = {};
       if (rawText) {
-        try { data = JSON.parse(rawText); } 
-        catch { throw new Error('Unexpected server response'); }
+        try { data = JSON.parse(rawText); } catch { throw new Error('Unexpected server response'); }
       }
       if (!response.ok) throw new Error(data.error || 'Failed to fetch files');
       setFiles(data.files || []);
@@ -71,19 +67,51 @@ export default function Dashboard({ onLogout }) {
 
   const parentPath = currentPath ? currentPath.split('/').slice(0, -1).join('/') : null;
 
+  // --- Upload Logic ---
+  const uploadFiles = async (fileList) => {
+    if (!fileList || fileList.length === 0) return;
+    setIsUploading(true);
+    
+    const formData = new FormData();
+    formData.append('currentPath', currentPath);
+    Array.from(fileList).forEach(file => formData.append('files', file));
+
+    try {
+      const token = localStorage.getItem('vps_token');
+      const res = await fetch('/api/files/upload', {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}` }, 
+        // Note: Do NOT set Content-Type for FormData. The browser sets it automatically with the correct boundary boundary!
+        body: formData
+      });
+      
+      if (!res.ok) throw new Error((await res.json()).error || 'Failed to upload');
+      fetchFiles(currentPath);
+    } catch (err) {
+      alert(err.message);
+    } finally {
+      setIsUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  };
+
   // --- Drag and Drop Handlers ---
   const handleDragStart = (e, file) => {
-    // Required for Firefox compatibility
     e.dataTransfer.setData('text/plain', file.path); 
     setDraggedItem(file.path);
   };
 
   const handleDragOver = (e, targetPath) => {
-    e.preventDefault(); // Required to allow a drop
+    e.preventDefault();
     e.stopPropagation();
-    e.dataTransfer.dropEffect = 'move';
-    if (draggedItem && draggedItem !== targetPath) {
-      setDragOverTarget(targetPath);
+    
+    // Check if we are dragging external OS files
+    if (e.dataTransfer.types.includes('Files')) {
+      e.dataTransfer.dropEffect = 'copy';
+      setDragOverTarget(targetPath || 'GRID');
+    } else {
+      e.dataTransfer.dropEffect = 'move';
+      if (draggedItem && draggedItem !== targetPath) setDragOverTarget(targetPath);
     }
   };
 
@@ -98,8 +126,14 @@ export default function Dashboard({ onLogout }) {
     e.stopPropagation();
     setDragOverTarget(null);
 
+    // 1. Handle External File Drop (from Windows/Mac)
+    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      await uploadFiles(e.dataTransfer.files);
+      return;
+    }
+
+    // 2. Handle Internal File Move (from inside the app)
     const sourcePath = e.dataTransfer.getData('text/plain') || draggedItem;
-    // Don't drop on itself or the current folder
     if (!sourcePath || sourcePath === destinationDir) {
       setDraggedItem(null);
       return; 
@@ -110,16 +144,11 @@ export default function Dashboard({ onLogout }) {
       const res = await fetch('/api/files/move', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-        body: JSON.stringify({ sourcePath, destinationDir })
+        body: JSON.stringify({ sourcePath, destinationDir: destinationDir || '' })
       });
       if (!res.ok) throw new Error((await res.json()).error || 'Failed to move');
-      
       fetchFiles(currentPath);
-    } catch (err) {
-      alert(err.message);
-    } finally {
-      setDraggedItem(null);
-    }
+    } catch (err) { alert(err.message); } finally { setDraggedItem(null); }
   };
 
   // --- API & UI Actions ---
@@ -216,7 +245,6 @@ export default function Dashboard({ onLogout }) {
     } catch (err) { alert(err.message); } finally { setEditorState(prev => ({ ...prev, isSaving: false })); }
   };
 
-  // --- Editor View ---
   if (editorState.isOpen) {
     const lang = editorState.filePath.split('.').pop().toLowerCase();
     const map = { js: 'javascript', json: 'json', html: 'html', css: 'css', py: 'python', lua: 'lua' };
@@ -236,7 +264,6 @@ export default function Dashboard({ onLogout }) {
     );
   }
 
-  // --- Main Explorer View ---
   return (
     <div className="dashboard-container">
       <div className="dashboard-header">
@@ -257,7 +284,6 @@ export default function Dashboard({ onLogout }) {
             &#8592; Up
           </button>
           
-          {/* Interactive Root Drop Zone */}
           <span 
             className={`breadcrumb-segment ${dragOverTarget === 'ROOT' ? 'drag-over' : ''}`}
             onClick={() => setCurrentPath('')}
@@ -268,7 +294,6 @@ export default function Dashboard({ onLogout }) {
             Root
           </span>
 
-          {/* Dynamically Generate Interactive Subfolder Drop Zones */}
           {currentPath && currentPath.split('/').map((part, index, arr) => {
             const targetPath = arr.slice(0, index + 1).join('/');
             return (
@@ -289,6 +314,19 @@ export default function Dashboard({ onLogout }) {
         </div>
         <div className="action-buttons">
           {clipboard && <button className="action-btn" style={{ backgroundColor: '#2e7d32' }} onClick={handlePaste}>📋 Paste Here</button>}
+          
+          {/* Hidden File Input & Upload Button */}
+          <input 
+            type="file" 
+            multiple 
+            ref={fileInputRef} 
+            style={{ display: 'none' }} 
+            onChange={(e) => uploadFiles(e.target.files)} 
+          />
+          <button className="action-btn" style={{ backgroundColor: '#0056b3' }} onClick={() => fileInputRef.current.click()} disabled={isUploading}>
+            {isUploading ? 'Uploading...' : '⬆️ Upload'}
+          </button>
+          
           <button className="action-btn" onClick={() => setModal({ isOpen: true, type: 'folder', input: '' })}>+ Folder</button>
           <button className="action-btn" onClick={() => setModal({ isOpen: true, type: 'text', input: '' })}>+ File</button>
         </div>
@@ -297,7 +335,12 @@ export default function Dashboard({ onLogout }) {
       {error && <div className="error-message">{error}</div>}
       
       {loading ? ( <div className="loading-state">Loading...</div> ) : (
-        <div className="file-grid">
+        <div 
+          className={`file-grid ${dragOverTarget === 'GRID' ? 'drag-over' : ''}`}
+          onDragOver={(e) => handleDragOver(e, null)} // Pass null so it defaults to 'GRID' logic
+          onDragLeave={handleDragLeave}
+          onDrop={(e) => handleDrop(e, currentPath)} // Drop OS files into the current open folder
+        >
           {files.map((file, index) => {
             const info = file.isDirectory ? { icon: '📁' } : getFileInfo(file.name);
             const isDragOver = dragOverTarget === file.path;
@@ -308,7 +351,6 @@ export default function Dashboard({ onLogout }) {
                 className={`file-tile ${isDragOver ? 'drag-over' : ''}`}
                 draggable={true}
                 onDragStart={(e) => handleDragStart(e, file)}
-                // Only allow dropping ONTO folders
                 onDragOver={file.isDirectory ? (e) => handleDragOver(e, file.path) : null}
                 onDragLeave={file.isDirectory ? handleDragLeave : null}
                 onDrop={file.isDirectory ? (e) => handleDrop(e, file.path) : null}
@@ -326,7 +368,16 @@ export default function Dashboard({ onLogout }) {
         </div>
       )}
       
-      {!loading && files.length === 0 && <div className="empty-state">This folder is empty.</div>}
+      {!loading && files.length === 0 && (
+        <div 
+          className={`empty-state ${dragOverTarget === 'GRID' ? 'drag-over' : ''}`}
+          onDragOver={(e) => handleDragOver(e, null)}
+          onDragLeave={handleDragLeave}
+          onDrop={(e) => handleDrop(e, currentPath)}
+        >
+          This folder is empty. Drag files here to upload.
+        </div>
+      )}
 
       {contextMenu.visible && (
         <div className="context-menu" style={{ top: contextMenu.y, left: contextMenu.x }} onClick={(e) => e.stopPropagation()}>
