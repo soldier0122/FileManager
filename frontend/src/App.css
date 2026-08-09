@@ -389,3 +389,38 @@ button:disabled {
   margin-bottom: 20px;
   background-color: #fff; /* Native PDF viewers expect a white background */
 }
+
+/* Drag and Drop Styles */
+.file-tile.drag-over {
+  background-color: #3b3b4f;
+  border: 1px dashed var(--text-primary, #fff);
+  transform: scale(1.02);
+}
+
+.back-btn {
+  transition: all 0.2s ease;
+}
+
+.back-btn.drag-over {
+  background-color: #3b3b4f;
+  border: 1px dashed var(--text-primary, #fff);
+}
+
+/* Breadcrumb Interactive Styles */
+.breadcrumb-segment {
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 4px;
+  transition: all 0.2s ease;
+  border: 1px dashed transparent;
+  user-select: none;
+}
+
+.breadcrumb-segment:hover {
+  background-color: rgba(255, 255, 255, 0.1);
+}
+
+.breadcrumb-segment.drag-over {
+  background-color: #3b3b4f;
+  border-color: var(--text-primary, #fff);
+}

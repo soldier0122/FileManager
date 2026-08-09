@@ -220,4 +220,28 @@ router.get('/export', authenticateToken, async (req, res) => {
     }
 });
 
+// PUT /api/files/move
+router.put('/move', authenticateToken, async (req, res) => {
+    try {
+        const { sourcePath, destinationDir } = req.body;
+        // destinationDir can be empty string for root, so we check strictly for undefined
+        if (!sourcePath || destinationDir === undefined) {
+            return res.status(400).json({ error: 'Missing parameters' });
+        }
+
+        const src = getSafePath(sourcePath);
+        // Create the new path by placing the source file's name inside the destination directory
+        const dest = getSafePath(path.join(destinationDir, path.basename(src)));
+
+        // Ensure the new path doesn't escape the storage root
+        if (!dest.startsWith(STORAGE_ROOT)) throw new Error('Out of bounds');
+
+        await fs.rename(src, dest);
+        res.json({ message: 'Moved successfully' });
+    } catch (error) {
+        console.error('Move error:', error);
+        res.status(500).json({ error: 'Failed to move item' });
+    }
+});
+
 module.exports = router;

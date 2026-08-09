@@ -21,13 +21,16 @@ export default function Dashboard({ onLogout }) {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
 
-  // Advanced States
   const [editorState, setEditorState] = useState({ isOpen: false, filePath: '', content: '', isSaving: false });
-  const [mediaViewer, setMediaViewer] = useState({ isOpen: false, url: '', filename: '', type: '' });
+  const [mediaViewer, setMediaViewer] = useState({ isOpen: false, url: '', filename: '', type: '', isBlob: false });
   
   const [modal, setModal] = useState({ isOpen: false, type: '', input: '', error: '', targetPath: '' });
   const [clipboard, setClipboard] = useState(null);
   const [contextMenu, setContextMenu] = useState({ visible: false, x: 0, y: 0, file: null });
+
+  // Drag and Drop States
+  const [draggedItem, setDraggedItem] = useState(null);
+  const [dragOverTarget, setDragOverTarget] = useState(null);
 
   useEffect(() => {
     sessionStorage.setItem('vps_currentPath', currentPath);
@@ -45,9 +48,7 @@ export default function Dashboard({ onLogout }) {
     setError('');
     try {
       const token = localStorage.getItem('vps_token');
-      const response = await fetch(`/api/files?path=${encodeURIComponent(path)}`, {
-        headers: { 'Authorization': `Bearer ${token}` }
-      });
+      const response = await fetch(`/api/files?path=${encodeURIComponent(path)}`, { headers: { 'Authorization': `Bearer ${token}` } });
       if (response.status === 401 || response.status === 403) return onLogout();
 
       const rawText = await response.text();
@@ -58,11 +59,7 @@ export default function Dashboard({ onLogout }) {
       }
       if (!response.ok) throw new Error(data.error || 'Failed to fetch files');
       setFiles(data.files || []);
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setLoading(false);
-    }
+    } catch (err) { setError(err.message); } finally { setLoading(false); }
   };
 
   const navigateUp = () => {
@@ -72,6 +69,60 @@ export default function Dashboard({ onLogout }) {
     setCurrentPath(parts.join('/'));
   };
 
+  const parentPath = currentPath ? currentPath.split('/').slice(0, -1).join('/') : null;
+
+  // --- Drag and Drop Handlers ---
+  const handleDragStart = (e, file) => {
+    // Required for Firefox compatibility
+    e.dataTransfer.setData('text/plain', file.path); 
+    setDraggedItem(file.path);
+  };
+
+  const handleDragOver = (e, targetPath) => {
+    e.preventDefault(); // Required to allow a drop
+    e.stopPropagation();
+    e.dataTransfer.dropEffect = 'move';
+    if (draggedItem && draggedItem !== targetPath) {
+      setDragOverTarget(targetPath);
+    }
+  };
+
+  const handleDragLeave = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragOverTarget(null);
+  };
+
+  const handleDrop = async (e, destinationDir) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragOverTarget(null);
+
+    const sourcePath = e.dataTransfer.getData('text/plain') || draggedItem;
+    // Don't drop on itself or the current folder
+    if (!sourcePath || sourcePath === destinationDir) {
+      setDraggedItem(null);
+      return; 
+    }
+
+    try {
+      const token = localStorage.getItem('vps_token');
+      const res = await fetch('/api/files/move', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify({ sourcePath, destinationDir })
+      });
+      if (!res.ok) throw new Error((await res.json()).error || 'Failed to move');
+      
+      fetchFiles(currentPath);
+    } catch (err) {
+      alert(err.message);
+    } finally {
+      setDraggedItem(null);
+    }
+  };
+
+  // --- API & UI Actions ---
   const handleModalSubmit = async (e) => {
     e.preventDefault();
     setModal(prev => ({ ...prev, error: '' }));
@@ -82,19 +133,13 @@ export default function Dashboard({ onLogout }) {
       let endpoint, body, method = 'POST';
 
       if (modal.type === 'rename') {
-        endpoint = '/api/files/rename';
-        method = 'PUT';
-        body = { oldPath: modal.targetPath, newName: modal.input };
+        endpoint = '/api/files/rename'; method = 'PUT'; body = { oldPath: modal.targetPath, newName: modal.input };
       } else {
         endpoint = modal.type === 'folder' ? '/api/files/folder' : '/api/files/text';
         body = modal.type === 'folder' ? { currentPath, folderName: modal.input } : { currentPath, fileName: modal.input };
       }
 
-      const res = await fetch(endpoint, {
-        method,
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-        body: JSON.stringify(body)
-      });
+      const res = await fetch(endpoint, { method, headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` }, body: JSON.stringify(body) });
       if (!res.ok) throw new Error((await res.json()).error || `Failed operation`);
       setModal({ isOpen: false, type: '', input: '', error: '', targetPath: '' });
       fetchFiles(currentPath);
@@ -106,7 +151,6 @@ export default function Dashboard({ onLogout }) {
 
     if (action === 'open') {
       if (file.isDirectory) return setCurrentPath(file.path);
-      
       const fileInfo = getFileInfo(file.name);
       
       if (fileInfo.type === 'image' || fileInfo.type === 'pdf') {
@@ -118,18 +162,17 @@ export default function Dashboard({ onLogout }) {
           const url = URL.createObjectURL(typedBlob);
           setMediaViewer({ isOpen: true, url, filename: file.name, type: fileInfo.type, isBlob: true });
         } catch (err) { alert(err.message); }
-      } 
-      else if (fileInfo.type === 'video' || fileInfo.type === 'audio') {
-        // Stream directly using the URL token instead of loading into RAM
+      } else if (fileInfo.type === 'video' || fileInfo.type === 'audio') {
         const url = `/api/files/download?path=${encodeURIComponent(file.path)}&token=${token}`;
         setMediaViewer({ isOpen: true, url, filename: file.name, type: fileInfo.type, isBlob: false });
-      } 
-      else if (fileInfo.type === 'code' || fileInfo.type === 'text') {
+      } else if (fileInfo.type === 'code' || fileInfo.type === 'text') {
         openFile(file.path);
-      } 
-      else {
-        alert(`Cannot preview ${fileInfo.type} files yet.`);
-      }
+      } else alert(`Cannot preview ${fileInfo.type} files yet.`);
+    } 
+    else if (action === 'download') {
+      const url = `/api/files/export?path=${encodeURIComponent(file.path)}&token=${token}`;
+      const a = document.createElement('a'); a.style.display = 'none'; a.href = url;
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
     }
     else if (action === 'rename') setModal({ isOpen: true, type: 'rename', input: file.name, error: '', targetPath: file.path });
     else if (action === 'copy') setClipboard(file.path);
@@ -139,31 +182,6 @@ export default function Dashboard({ onLogout }) {
         await fetch('/api/files/delete', { method: 'DELETE', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` }, body: JSON.stringify({ filePath: file.path }) });
         fetchFiles(currentPath);
       } catch (err) { alert('Failed to delete file'); }
-    }
-    else if (action === 'download') {
-      try {
-        const token = localStorage.getItem('vps_token');
-        const res = await fetch(`/api/files/export?path=${encodeURIComponent(file.path)}`, {
-          headers: { 'Authorization': `Bearer ${token}` }
-        });
-
-        if (!res.ok) {
-          const errData = await res.json().catch(() => ({}));
-          throw new Error(errData.error || 'Failed to download item');
-        }
-
-        const blob = await res.blob();
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = file.isDirectory ? `${file.name}.zip` : file.name;
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-        setTimeout(() => URL.revokeObjectURL(url), 1000);
-      } catch (err) {
-        alert(err.message);
-      }
     }
   };
 
@@ -195,8 +213,7 @@ export default function Dashboard({ onLogout }) {
       const res = await fetch('/api/files/update', { method: 'PUT', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` }, body: JSON.stringify({ filePath: editorState.filePath, content: editorState.content }) });
       if (!res.ok) throw new Error('Failed to save file');
       alert('Saved successfully!');
-    } catch (err) { alert(err.message); } 
-    finally { setEditorState(prev => ({ ...prev, isSaving: false })); }
+    } catch (err) { alert(err.message); } finally { setEditorState(prev => ({ ...prev, isSaving: false })); }
   };
 
   // --- Editor View ---
@@ -229,8 +246,46 @@ export default function Dashboard({ onLogout }) {
       
       <div className="controls-bar">
         <div className="breadcrumbs">
-          <button className="back-btn" onClick={navigateUp} disabled={!currentPath}>&#8592; Up</button>
-          <span>Root {currentPath ? `/ ${currentPath}` : ''}</span>
+          <button 
+            className={`back-btn ${dragOverTarget === 'UP_LEVEL' ? 'drag-over' : ''}`}
+            onClick={navigateUp} 
+            disabled={!currentPath}
+            onDragOver={currentPath ? (e) => handleDragOver(e, 'UP_LEVEL') : null}
+            onDragLeave={currentPath ? handleDragLeave : null}
+            onDrop={currentPath ? (e) => handleDrop(e, parentPath) : null}
+          >
+            &#8592; Up
+          </button>
+          
+          {/* Interactive Root Drop Zone */}
+          <span 
+            className={`breadcrumb-segment ${dragOverTarget === 'ROOT' ? 'drag-over' : ''}`}
+            onClick={() => setCurrentPath('')}
+            onDragOver={(e) => handleDragOver(e, 'ROOT')}
+            onDragLeave={handleDragLeave}
+            onDrop={(e) => handleDrop(e, '')}
+          >
+            Root
+          </span>
+
+          {/* Dynamically Generate Interactive Subfolder Drop Zones */}
+          {currentPath && currentPath.split('/').map((part, index, arr) => {
+            const targetPath = arr.slice(0, index + 1).join('/');
+            return (
+              <span key={targetPath}>
+                {' / '}
+                <span 
+                  className={`breadcrumb-segment ${dragOverTarget === targetPath ? 'drag-over' : ''}`}
+                  onClick={() => setCurrentPath(targetPath)}
+                  onDragOver={(e) => handleDragOver(e, targetPath)}
+                  onDragLeave={handleDragLeave}
+                  onDrop={(e) => handleDrop(e, targetPath)}
+                >
+                  {part}
+                </span>
+              </span>
+            );
+          })}
         </div>
         <div className="action-buttons">
           {clipboard && <button className="action-btn" style={{ backgroundColor: '#2e7d32' }} onClick={handlePaste}>📋 Paste Here</button>}
@@ -244,13 +299,19 @@ export default function Dashboard({ onLogout }) {
       {loading ? ( <div className="loading-state">Loading...</div> ) : (
         <div className="file-grid">
           {files.map((file, index) => {
-            // Check file type to assign correct icon
             const info = file.isDirectory ? { icon: '📁' } : getFileInfo(file.name);
+            const isDragOver = dragOverTarget === file.path;
             
             return (
               <div 
                 key={index} 
-                className="file-tile"
+                className={`file-tile ${isDragOver ? 'drag-over' : ''}`}
+                draggable={true}
+                onDragStart={(e) => handleDragStart(e, file)}
+                // Only allow dropping ONTO folders
+                onDragOver={file.isDirectory ? (e) => handleDragOver(e, file.path) : null}
+                onDragLeave={file.isDirectory ? handleDragLeave : null}
+                onDrop={file.isDirectory ? (e) => handleDrop(e, file.path) : null}
                 onClick={(e) => { e.stopPropagation(); handleAction('open', file); }}
                 onContextMenu={(e) => {
                   e.preventDefault(); 
@@ -267,12 +328,9 @@ export default function Dashboard({ onLogout }) {
       
       {!loading && files.length === 0 && <div className="empty-state">This folder is empty.</div>}
 
-     {/* Context Menu */}
       {contextMenu.visible && (
         <div className="context-menu" style={{ top: contextMenu.y, left: contextMenu.x }} onClick={(e) => e.stopPropagation()}>
-          <div className="context-menu-item" onClick={() => handleAction('open', contextMenu.file)}>
-            {contextMenu.file.isDirectory ? '📂 Open Folder' : '👀 Open / View'}
-          </div>
+          <div className="context-menu-item" onClick={() => handleAction('open', contextMenu.file)}>{contextMenu.file.isDirectory ? '📂 Open Folder' : '👀 Open / View'}</div>
           <div className="context-menu-item" onClick={() => handleAction('download', contextMenu.file)}>⬇️ Download</div>
           <div className="context-menu-item" onClick={() => handleAction('rename', contextMenu.file)}>🏷️ Rename</div>
           <div className="context-menu-item" onClick={() => handleAction('copy', contextMenu.file)}>📄 Copy</div>
@@ -280,7 +338,6 @@ export default function Dashboard({ onLogout }) {
         </div>
       )}
 
-      {/* Input Modal */}
       {modal.isOpen && (
         <div className="modal-overlay">
           <div className="modal-content">
@@ -297,42 +354,17 @@ export default function Dashboard({ onLogout }) {
         </div>
       )}
 
-{/* Media, PDF, Video, and Audio Viewer Modal */}
       {mediaViewer.isOpen && (
         <div className="modal-overlay" onClick={() => {
           if (mediaViewer.isBlob) URL.revokeObjectURL(mediaViewer.url);
           setMediaViewer({ isOpen: false, url: '', filename: '', type: '', isBlob: false });
         }}>
-          <div 
-            className={`modal-content media-preview-container ${mediaViewer.type === 'pdf' || mediaViewer.type === 'video' ? 'pdf-viewer' : ''}`} 
-            onClick={e => e.stopPropagation()}
-            style={{ display: 'flex', flexDirection: 'column' }}
-          >
+          <div className={`modal-content media-preview-container ${mediaViewer.type === 'pdf' || mediaViewer.type === 'video' ? 'pdf-viewer' : ''}`} onClick={e => e.stopPropagation()} style={{ display: 'flex', flexDirection: 'column' }}>
             <h3 style={{ wordBreak: 'break-all', textAlign: 'center' }}>{mediaViewer.filename}</h3>
-            
             {mediaViewer.type === 'image' && <img src={mediaViewer.url} alt={mediaViewer.filename} />}
             {mediaViewer.type === 'pdf' && <iframe src={mediaViewer.url} title={mediaViewer.filename} />}
-            
-            {/* HTML5 Native Video Player */}
-            {mediaViewer.type === 'video' && (
-              <video 
-                controls 
-                autoPlay 
-                src={mediaViewer.url} 
-                style={{ width: '100%', maxHeight: '70vh', backgroundColor: '#000', borderRadius: '8px', marginBottom: '20px' }} 
-              />
-            )}
-
-            {/* HTML5 Native Audio Player */}
-            {mediaViewer.type === 'audio' && (
-              <audio 
-                controls 
-                autoPlay 
-                src={mediaViewer.url} 
-                style={{ width: '100%', marginBottom: '20px' }} 
-              />
-            )}
-            
+            {mediaViewer.type === 'video' && <video controls src={mediaViewer.url} style={{ width: '100%', maxHeight: '70vh', backgroundColor: '#000', borderRadius: '8px', marginBottom: '20px' }} />}
+            {mediaViewer.type === 'audio' && <audio controls src={mediaViewer.url} style={{ width: '100%', marginBottom: '20px' }} />}
             <div className="modal-actions" style={{ width: '100%', justifyContent: 'center', marginTop: 'auto' }}>
               <button className="action-btn btn-secondary" onClick={() => {
                 if (mediaViewer.isBlob) URL.revokeObjectURL(mediaViewer.url);
