@@ -1,3 +1,4 @@
+const { ZipArchive } = require('archiver');
 const express = require('express');
 const fs = require('fs/promises');
 const path = require('path');
@@ -178,6 +179,44 @@ router.get('/download', authenticateToken, (req, res) => {
     } catch (error) {
         console.error('Download error:', error);
         res.status(500).json({ error: 'Failed to download file' });
+    }
+});
+
+// GET /api/files/export?path=...
+router.get('/export', authenticateToken, async (req, res) => {
+    try {
+        const relativePath = req.query.path;
+        if (!relativePath) return res.status(400).json({ error: 'Path required' });
+
+        const targetPath = getSafePath(relativePath);
+        const stat = await fs.stat(targetPath);
+
+        if (stat.isDirectory()) {
+            const zipName = `${path.basename(targetPath) || 'export'}.zip`;
+            res.attachment(zipName);
+
+            const archive = new ZipArchive({ zlib: { level: 9 } });
+
+            archive.on('error', (err) => {
+                console.error('Archive error:', err);
+                if (!res.headersSent) {
+                    res.status(500).json({ error: 'Failed to export folder' });
+                    return;
+                }
+                res.destroy(err);
+            });
+
+            archive.pipe(res);
+            archive.directory(targetPath, false);
+            await archive.finalize();
+        } else {
+            res.download(targetPath);
+        }
+    } catch (error) {
+        console.error('Export error:', error);
+        if (!res.headersSent) {
+            res.status(500).json({ error: 'Failed to export item' });
+        }
     }
 });
 

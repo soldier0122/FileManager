@@ -111,27 +111,26 @@ export default function Dashboard({ onLogout }) {
       
       if (fileInfo.type === 'image' || fileInfo.type === 'pdf') {
         try {
-          const res = await fetch(`/api/files/download?path=${encodeURIComponent(file.path)}`, { 
-            headers: { 'Authorization': `Bearer ${token}` }
-          });
+          const res = await fetch(`/api/files/download?path=${encodeURIComponent(file.path)}`, { headers: { 'Authorization': `Bearer ${token}` }});
           if (!res.ok) throw new Error('Failed to load file');
-          
           const blob = await res.blob();
-          
-          // Force the correct MIME type for PDFs so the browser viewer triggers
-          const typedBlob = new Blob([blob], { 
-            type: fileInfo.type === 'pdf' ? 'application/pdf' : blob.type 
-          });
-          
+          const typedBlob = new Blob([blob], { type: fileInfo.type === 'pdf' ? 'application/pdf' : blob.type });
           const url = URL.createObjectURL(typedBlob);
-          setMediaViewer({ isOpen: true, url, filename: file.name, type: fileInfo.type });
+          setMediaViewer({ isOpen: true, url, filename: file.name, type: fileInfo.type, isBlob: true });
         } catch (err) { alert(err.message); }
-      } else if (fileInfo.type === 'code' || fileInfo.type === 'text') {
+      } 
+      else if (fileInfo.type === 'video' || fileInfo.type === 'audio') {
+        // Stream directly using the URL token instead of loading into RAM
+        const url = `/api/files/download?path=${encodeURIComponent(file.path)}&token=${token}`;
+        setMediaViewer({ isOpen: true, url, filename: file.name, type: fileInfo.type, isBlob: false });
+      } 
+      else if (fileInfo.type === 'code' || fileInfo.type === 'text') {
         openFile(file.path);
-      } else {
+      } 
+      else {
         alert(`Cannot preview ${fileInfo.type} files yet.`);
       }
-    } 
+    }
     else if (action === 'rename') setModal({ isOpen: true, type: 'rename', input: file.name, error: '', targetPath: file.path });
     else if (action === 'copy') setClipboard(file.path);
     else if (action === 'delete') {
@@ -140,6 +139,31 @@ export default function Dashboard({ onLogout }) {
         await fetch('/api/files/delete', { method: 'DELETE', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` }, body: JSON.stringify({ filePath: file.path }) });
         fetchFiles(currentPath);
       } catch (err) { alert('Failed to delete file'); }
+    }
+    else if (action === 'download') {
+      try {
+        const token = localStorage.getItem('vps_token');
+        const res = await fetch(`/api/files/export?path=${encodeURIComponent(file.path)}`, {
+          headers: { 'Authorization': `Bearer ${token}` }
+        });
+
+        if (!res.ok) {
+          const errData = await res.json().catch(() => ({}));
+          throw new Error(errData.error || 'Failed to download item');
+        }
+
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = file.isDirectory ? `${file.name}.zip` : file.name;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+      } catch (err) {
+        alert(err.message);
+      }
     }
   };
 
@@ -243,12 +267,13 @@ export default function Dashboard({ onLogout }) {
       
       {!loading && files.length === 0 && <div className="empty-state">This folder is empty.</div>}
 
-      {/* Context Menu */}
+     {/* Context Menu */}
       {contextMenu.visible && (
         <div className="context-menu" style={{ top: contextMenu.y, left: contextMenu.x }} onClick={(e) => e.stopPropagation()}>
           <div className="context-menu-item" onClick={() => handleAction('open', contextMenu.file)}>
             {contextMenu.file.isDirectory ? '📂 Open Folder' : '👀 Open / View'}
           </div>
+          <div className="context-menu-item" onClick={() => handleAction('download', contextMenu.file)}>⬇️ Download</div>
           <div className="context-menu-item" onClick={() => handleAction('rename', contextMenu.file)}>🏷️ Rename</div>
           <div className="context-menu-item" onClick={() => handleAction('copy', contextMenu.file)}>📄 Copy</div>
           <div className="context-menu-item danger" onClick={() => handleAction('delete', contextMenu.file)}>🗑️ Delete</div>
@@ -272,26 +297,46 @@ export default function Dashboard({ onLogout }) {
         </div>
       )}
 
-      {/* Media & PDF Viewer Modal */}
+{/* Media, PDF, Video, and Audio Viewer Modal */}
       {mediaViewer.isOpen && (
         <div className="modal-overlay" onClick={() => {
-          URL.revokeObjectURL(mediaViewer.url);
-          setMediaViewer({ isOpen: false, url: '', filename: '', type: '' });
+          if (mediaViewer.isBlob) URL.revokeObjectURL(mediaViewer.url);
+          setMediaViewer({ isOpen: false, url: '', filename: '', type: '', isBlob: false });
         }}>
           <div 
-            className={`modal-content media-preview-container ${mediaViewer.type === 'pdf' ? 'pdf-viewer' : ''}`} 
+            className={`modal-content media-preview-container ${mediaViewer.type === 'pdf' || mediaViewer.type === 'video' ? 'pdf-viewer' : ''}`} 
             onClick={e => e.stopPropagation()}
             style={{ display: 'flex', flexDirection: 'column' }}
           >
-            <h3>{mediaViewer.filename}</h3>
+            <h3 style={{ wordBreak: 'break-all', textAlign: 'center' }}>{mediaViewer.filename}</h3>
             
             {mediaViewer.type === 'image' && <img src={mediaViewer.url} alt={mediaViewer.filename} />}
             {mediaViewer.type === 'pdf' && <iframe src={mediaViewer.url} title={mediaViewer.filename} />}
             
+            {/* HTML5 Native Video Player */}
+            {mediaViewer.type === 'video' && (
+              <video 
+                controls 
+                autoPlay 
+                src={mediaViewer.url} 
+                style={{ width: '100%', maxHeight: '70vh', backgroundColor: '#000', borderRadius: '8px', marginBottom: '20px' }} 
+              />
+            )}
+
+            {/* HTML5 Native Audio Player */}
+            {mediaViewer.type === 'audio' && (
+              <audio 
+                controls 
+                autoPlay 
+                src={mediaViewer.url} 
+                style={{ width: '100%', marginBottom: '20px' }} 
+              />
+            )}
+            
             <div className="modal-actions" style={{ width: '100%', justifyContent: 'center', marginTop: 'auto' }}>
               <button className="action-btn btn-secondary" onClick={() => {
-                URL.revokeObjectURL(mediaViewer.url);
-                setMediaViewer({ isOpen: false, url: '', filename: '', type: '' });
+                if (mediaViewer.isBlob) URL.revokeObjectURL(mediaViewer.url);
+                setMediaViewer({ isOpen: false, url: '', filename: '', type: '', isBlob: false });
               }}>Close Preview</button>
             </div>
           </div>
