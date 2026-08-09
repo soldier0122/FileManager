@@ -16,6 +16,12 @@ A self-hosted, web-based file manager. Run it on a VPS or home server and get a 
 - 🗂️ **Standard file ops** — create folders and text files, rename, copy, move, and delete
 - 🖥️ **Right-click context menu** for quick actions on any item
 
+  ## Screenshots
+| | |
+|:---:|:---:|
+| <img width="100%" alt="screen_hub" src="https://github.com/user-attachments/assets/885ae0b9-b3bd-4752-a070-fcde547c0b3b" /> | <img width="100%" alt="screen_preview" src="https://github.com/user-attachments/assets/bf8618eb-cb08-42fb-bb23-1027dd43614c" /> |
+| <img width="100%" alt="pdf_viewer" src="https://github.com/user-attachments/assets/6401db62-4255-43e8-957d-5052bd077f2b" /> | <img width="100%" alt="editor" src="https://github.com/user-attachments/assets/09d0abf4-cb01-4c36-88cc-a1ef9c99e65d" /> |
+
 ## Tech Stack
 
 **Backend**
