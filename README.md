@@ -1,6 +1,6 @@
 # File Manager
 
-A self-hosted, web-based file manager. Run it on a VPS or home server and get a browser UI for uploading, organizing, previewing, and editing files — protected by a single admin login.
+A self-hosted, web-based file manager. Run it on a VPS or home server and get a browser UI for uploading, organizing, previewing, and editing files
 
 ![File Manager](frontend/src/assets/hero.png)
 
