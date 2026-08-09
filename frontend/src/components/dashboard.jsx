@@ -1,22 +1,44 @@
 import { useState, useEffect } from 'react';
 import Editor from '@monaco-editor/react';
 
+// --- File Extension Helper ---
+const getFileInfo = (filename) => {
+  const ext = filename.split('.').pop().toLowerCase();
+  
+  if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg'].includes(ext)) return { type: 'image', icon: '🖼️' };
+  if (['mp4', 'webm', 'mkv', 'avi'].includes(ext)) return { type: 'video', icon: '🎥' };
+  if (['mp3', 'wav', 'ogg'].includes(ext)) return { type: 'audio', icon: '🎵' };
+  if (['zip', 'rar', 'tar', 'gz', '7z'].includes(ext)) return { type: 'archive', icon: '📦' };
+  if (['pdf'].includes(ext)) return { type: 'pdf', icon: '📕' };
+  if (['js', 'jsx', 'ts', 'tsx', 'py', 'json', 'html', 'css', 'lua'].includes(ext)) return { type: 'code', icon: '📝' };
+  
+  return { type: 'text', icon: '📄' };
+};
+
 export default function Dashboard({ onLogout }) {
   const [files, setFiles] = useState([]);
   const [currentPath, setCurrentPath] = useState(() => sessionStorage.getItem('vps_currentPath') || '');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
 
-  // Editor State
+  // Advanced States
   const [editorState, setEditorState] = useState({ isOpen: false, filePath: '', content: '', isSaving: false });
-
-  // Modal State
-  const [modal, setModal] = useState({ isOpen: false, type: '', input: '', error: '' });
+  const [mediaViewer, setMediaViewer] = useState({ isOpen: false, url: '', filename: '', type: '' });
+  
+  const [modal, setModal] = useState({ isOpen: false, type: '', input: '', error: '', targetPath: '' });
+  const [clipboard, setClipboard] = useState(null);
+  const [contextMenu, setContextMenu] = useState({ visible: false, x: 0, y: 0, file: null });
 
   useEffect(() => {
     sessionStorage.setItem('vps_currentPath', currentPath);
     fetchFiles(currentPath);
   }, [currentPath]);
+
+  useEffect(() => {
+    const handleClick = () => setContextMenu({ visible: false, x: 0, y: 0, file: null });
+    document.addEventListener('click', handleClick);
+    return () => document.removeEventListener('click', handleClick);
+  }, []);
 
   const fetchFiles = async (path) => {
     setLoading(true);
@@ -26,25 +48,15 @@ export default function Dashboard({ onLogout }) {
       const response = await fetch(`/api/files?path=${encodeURIComponent(path)}`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
-
-      if (response.status === 401 || response.status === 403) {
-        onLogout();
-        return;
-      }
+      if (response.status === 401 || response.status === 403) return onLogout();
 
       const rawText = await response.text();
       let data = {};
-
       if (rawText) {
-        try {
-          data = JSON.parse(rawText);
-        } catch {
-          throw new Error(rawText.slice(0, 200) || 'Unexpected server response');
-        }
+        try { data = JSON.parse(rawText); } 
+        catch { throw new Error('Unexpected server response'); }
       }
-
       if (!response.ok) throw new Error(data.error || 'Failed to fetch files');
-
       setFiles(data.files || []);
     } catch (err) {
       setError(err.message);
@@ -60,9 +72,6 @@ export default function Dashboard({ onLogout }) {
     setCurrentPath(parts.join('/'));
   };
 
-  // --- Modal Logic ---
-  const openModal = (type) => setModal({ isOpen: true, type, input: '', error: '' });
-
   const handleModalSubmit = async (e) => {
     e.preventDefault();
     setModal(prev => ({ ...prev, error: '' }));
@@ -70,118 +79,123 @@ export default function Dashboard({ onLogout }) {
 
     try {
       const token = localStorage.getItem('vps_token');
-      const endpoint = modal.type === 'folder' ? '/api/files/folder' : '/api/files/text';
-      const body = modal.type === 'folder' 
-        ? { currentPath, folderName: modal.input } 
-        : { currentPath, fileName: modal.input };
+      let endpoint, body, method = 'POST';
+
+      if (modal.type === 'rename') {
+        endpoint = '/api/files/rename';
+        method = 'PUT';
+        body = { oldPath: modal.targetPath, newName: modal.input };
+      } else {
+        endpoint = modal.type === 'folder' ? '/api/files/folder' : '/api/files/text';
+        body = modal.type === 'folder' ? { currentPath, folderName: modal.input } : { currentPath, fileName: modal.input };
+      }
 
       const res = await fetch(endpoint, {
-        method: 'POST',
+        method,
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
         body: JSON.stringify(body)
       });
-
-      if (!res.ok) throw new Error((await res.json()).error || `Failed to create ${modal.type}`);
-
-      setModal({ isOpen: false, type: '', input: '', error: '' });
+      if (!res.ok) throw new Error((await res.json()).error || `Failed operation`);
+      setModal({ isOpen: false, type: '', input: '', error: '', targetPath: '' });
       fetchFiles(currentPath);
-    } catch (err) {
-      setModal(prev => ({ ...prev, error: err.message }));
+    } catch (err) { setModal(prev => ({ ...prev, error: err.message })); }
+  };
+
+  const handleAction = async (action, file) => {
+    const token = localStorage.getItem('vps_token');
+
+    if (action === 'open') {
+      if (file.isDirectory) return setCurrentPath(file.path);
+      
+      const fileInfo = getFileInfo(file.name);
+      
+      if (fileInfo.type === 'image' || fileInfo.type === 'pdf') {
+        try {
+          const res = await fetch(`/api/files/download?path=${encodeURIComponent(file.path)}`, { 
+            headers: { 'Authorization': `Bearer ${token}` }
+          });
+          if (!res.ok) throw new Error('Failed to load file');
+          
+          const blob = await res.blob();
+          
+          // Force the correct MIME type for PDFs so the browser viewer triggers
+          const typedBlob = new Blob([blob], { 
+            type: fileInfo.type === 'pdf' ? 'application/pdf' : blob.type 
+          });
+          
+          const url = URL.createObjectURL(typedBlob);
+          setMediaViewer({ isOpen: true, url, filename: file.name, type: fileInfo.type });
+        } catch (err) { alert(err.message); }
+      } else if (fileInfo.type === 'code' || fileInfo.type === 'text') {
+        openFile(file.path);
+      } else {
+        alert(`Cannot preview ${fileInfo.type} files yet.`);
+      }
+    } 
+    else if (action === 'rename') setModal({ isOpen: true, type: 'rename', input: file.name, error: '', targetPath: file.path });
+    else if (action === 'copy') setClipboard(file.path);
+    else if (action === 'delete') {
+      if (!window.confirm(`Are you sure you want to permanently delete "${file.name}"?`)) return;
+      try {
+        await fetch('/api/files/delete', { method: 'DELETE', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` }, body: JSON.stringify({ filePath: file.path }) });
+        fetchFiles(currentPath);
+      } catch (err) { alert('Failed to delete file'); }
     }
   };
 
-  // --- Editor Logic ---
+  const handlePaste = async () => {
+    if (!clipboard) return;
+    try {
+      const token = localStorage.getItem('vps_token');
+      const res = await fetch('/api/files/copy', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` }, body: JSON.stringify({ sourcePath: clipboard, destinationDir: currentPath }) });
+      if (res.ok) { setClipboard(null); fetchFiles(currentPath); } 
+      else throw new Error((await res.json()).error);
+    } catch (err) { alert('Failed to paste: ' + err.message); }
+  };
+
   const openFile = async (filePath) => {
     try {
       const token = localStorage.getItem('vps_token');
-      const res = await fetch(`/api/files/read?path=${encodeURIComponent(filePath)}`, {
-        headers: { 'Authorization': `Bearer ${token}` }
-      });
-
+      const res = await fetch(`/api/files/read?path=${encodeURIComponent(filePath)}`, { headers: { 'Authorization': `Bearer ${token}` }});
       const rawText = await res.text();
-      let data = {};
-
-      if (rawText) {
-        try {
-          data = JSON.parse(rawText);
-        } catch {
-          throw new Error(rawText.slice(0, 200) || 'Failed to read file');
-        }
-      }
-
-      if (!res.ok) throw new Error(data.error || 'Failed to read file');
-
+      const data = JSON.parse(rawText);
+      if (!res.ok) throw new Error(data.error);
       setEditorState({ isOpen: true, filePath, content: data.content || '', isSaving: false });
-    } catch (err) {
-      setError(err.message);
-    }
+    } catch (err) { setError(err.message); }
   };
 
   const saveFile = async () => {
     setEditorState(prev => ({ ...prev, isSaving: true }));
     try {
       const token = localStorage.getItem('vps_token');
-      const res = await fetch('/api/files/update', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-        body: JSON.stringify({ filePath: editorState.filePath, content: editorState.content })
-      });
-
-      const rawText = await res.text();
-      let data = {};
-
-      if (rawText) {
-        try {
-          data = JSON.parse(rawText);
-        } catch {
-          throw new Error(rawText.slice(0, 200) || 'Failed to save file');
-        }
-      }
-
-      if (!res.ok) throw new Error(data.error || 'Failed to save file');
-      alert('File saved successfully!');
-    } catch (err) {
-      alert(err.message);
-    } finally {
-      setEditorState(prev => ({ ...prev, isSaving: false }));
-    }
+      const res = await fetch('/api/files/update', { method: 'PUT', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` }, body: JSON.stringify({ filePath: editorState.filePath, content: editorState.content }) });
+      if (!res.ok) throw new Error('Failed to save file');
+      alert('Saved successfully!');
+    } catch (err) { alert(err.message); } 
+    finally { setEditorState(prev => ({ ...prev, isSaving: false })); }
   };
 
-  // If the editor is open, render the editor UI instead of the file grid
+  // --- Editor View ---
   if (editorState.isOpen) {
-    // Basic language detection based on extension
-    const extension = editorState.filePath.split('.').pop().toLowerCase();
-    const languageMap = { js: 'javascript', json: 'json', html: 'html', css: 'css', py: 'python', r: 'r', sql: 'sql', java: 'java' };
-    const language = languageMap[extension] || 'plaintext';
-
+    const lang = editorState.filePath.split('.').pop().toLowerCase();
+    const map = { js: 'javascript', json: 'json', html: 'html', css: 'css', py: 'python', lua: 'lua' };
     return (
       <div className="dashboard-container" style={{ display: 'flex', flexDirection: 'column', height: '80vh' }}>
         <div className="controls-bar" style={{ marginBottom: '10px' }}>
-          <div className="breadcrumbs">
-            <span>Editing: {editorState.filePath}</span>
-          </div>
+          <span>Editing: {editorState.filePath}</span>
           <div className="action-buttons">
             <button className="action-btn btn-secondary" onClick={() => setEditorState({ isOpen: false })}>Close</button>
-            <button className="action-btn" onClick={saveFile} disabled={editorState.isSaving}>
-              {editorState.isSaving ? 'Saving...' : 'Save File'}
-            </button>
+            <button className="action-btn" onClick={saveFile} disabled={editorState.isSaving}>Save</button>
           </div>
         </div>
         <div style={{ flexGrow: 1, border: '1px solid #333', borderRadius: '8px', overflow: 'hidden' }}>
-          <Editor
-            height="100%"
-            theme="vs-dark"
-            language={language}
-            value={editorState.content}
-            onChange={(value) => setEditorState(prev => ({ ...prev, content: value }))}
-            options={{ minimap: { enabled: false }, fontSize: 14 }}
-          />
+          <Editor height="100%" theme="vs-dark" language={map[lang] || 'plaintext'} value={editorState.content} onChange={v => setEditorState(prev => ({ ...prev, content: v }))} options={{ minimap: { enabled: false } }} />
         </div>
       </div>
     );
   }
 
-  // Otherwise, render the standard file grid
+  // --- Main Explorer View ---
   return (
     <div className="dashboard-container">
       <div className="dashboard-header">
@@ -195,60 +209,91 @@ export default function Dashboard({ onLogout }) {
           <span>Root {currentPath ? `/ ${currentPath}` : ''}</span>
         </div>
         <div className="action-buttons">
-          <button className="action-btn" onClick={() => openModal('folder')}>+ Folder</button>
-          <button className="action-btn" onClick={() => openModal('text')}>+ File</button>
+          {clipboard && <button className="action-btn" style={{ backgroundColor: '#2e7d32' }} onClick={handlePaste}>📋 Paste Here</button>}
+          <button className="action-btn" onClick={() => setModal({ isOpen: true, type: 'folder', input: '' })}>+ Folder</button>
+          <button className="action-btn" onClick={() => setModal({ isOpen: true, type: 'text', input: '' })}>+ File</button>
         </div>
       </div>
 
       {error && <div className="error-message">{error}</div>}
       
-      {loading ? (
-        <div className="loading-state">Loading...</div>
-      ) : (
+      {loading ? ( <div className="loading-state">Loading...</div> ) : (
         <div className="file-grid">
-          {files.map((file, index) => (
-            <div 
-            key={index} 
-            className="file-tile"
-            // Use onClick for both now, but check if it's a folder or file
-            onClick={(e) => {
-                e.stopPropagation(); // Prevents bubbling issues
-                if (file.isDirectory) {
-                setCurrentPath(file.path);
-                } else {
-                openFile(file.path);
-                }
-            }}
-            >
-              <div className="icon">{file.isDirectory ? '📁' : '📄'}</div>
-              <div className="name">{file.name}</div>
-            </div>
-          ))}
+          {files.map((file, index) => {
+            // Check file type to assign correct icon
+            const info = file.isDirectory ? { icon: '📁' } : getFileInfo(file.name);
+            
+            return (
+              <div 
+                key={index} 
+                className="file-tile"
+                onClick={(e) => { e.stopPropagation(); handleAction('open', file); }}
+                onContextMenu={(e) => {
+                  e.preventDefault(); 
+                  setContextMenu({ visible: true, x: e.pageX, y: e.pageY, file });
+                }}
+              >
+                <div className="icon">{info.icon}</div>
+                <div className="name">{file.name}</div>
+              </div>
+            );
+          })}
         </div>
       )}
       
-      {!loading && files.length === 0 && (
-        <div className="empty-state">This folder is empty.</div>
+      {!loading && files.length === 0 && <div className="empty-state">This folder is empty.</div>}
+
+      {/* Context Menu */}
+      {contextMenu.visible && (
+        <div className="context-menu" style={{ top: contextMenu.y, left: contextMenu.x }} onClick={(e) => e.stopPropagation()}>
+          <div className="context-menu-item" onClick={() => handleAction('open', contextMenu.file)}>
+            {contextMenu.file.isDirectory ? '📂 Open Folder' : '👀 Open / View'}
+          </div>
+          <div className="context-menu-item" onClick={() => handleAction('rename', contextMenu.file)}>🏷️ Rename</div>
+          <div className="context-menu-item" onClick={() => handleAction('copy', contextMenu.file)}>📄 Copy</div>
+          <div className="context-menu-item danger" onClick={() => handleAction('delete', contextMenu.file)}>🗑️ Delete</div>
+        </div>
       )}
 
+      {/* Input Modal */}
       {modal.isOpen && (
         <div className="modal-overlay">
           <div className="modal-content">
-            <h3>Create {modal.type === 'folder' ? 'New Folder' : 'New File'}</h3>
+            <h3>{modal.type === 'rename' ? 'Rename Item' : `Create New ${modal.type}`}</h3>
             {modal.error && <div className="error-message">{modal.error}</div>}
             <form onSubmit={handleModalSubmit}>
-              <input
-                autoFocus
-                type="text"
-                placeholder={`Enter ${modal.type} name (e.g., script.py)`}
-                value={modal.input}
-                onChange={(e) => setModal({ ...modal, input: e.target.value })}
-              />
+              <input autoFocus type="text" value={modal.input} onChange={(e) => setModal({ ...modal, input: e.target.value })} />
               <div className="modal-actions">
                 <button type="button" className="action-btn btn-secondary" onClick={() => setModal({ isOpen: false })}>Cancel</button>
-                <button type="submit" className="action-btn">Create</button>
+                <button type="submit" className="action-btn">Confirm</button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Media & PDF Viewer Modal */}
+      {mediaViewer.isOpen && (
+        <div className="modal-overlay" onClick={() => {
+          URL.revokeObjectURL(mediaViewer.url);
+          setMediaViewer({ isOpen: false, url: '', filename: '', type: '' });
+        }}>
+          <div 
+            className={`modal-content media-preview-container ${mediaViewer.type === 'pdf' ? 'pdf-viewer' : ''}`} 
+            onClick={e => e.stopPropagation()}
+            style={{ display: 'flex', flexDirection: 'column' }}
+          >
+            <h3>{mediaViewer.filename}</h3>
+            
+            {mediaViewer.type === 'image' && <img src={mediaViewer.url} alt={mediaViewer.filename} />}
+            {mediaViewer.type === 'pdf' && <iframe src={mediaViewer.url} title={mediaViewer.filename} />}
+            
+            <div className="modal-actions" style={{ width: '100%', justifyContent: 'center', marginTop: 'auto' }}>
+              <button className="action-btn btn-secondary" onClick={() => {
+                URL.revokeObjectURL(mediaViewer.url);
+                setMediaViewer({ isOpen: false, url: '', filename: '', type: '' });
+              }}>Close Preview</button>
+            </div>
           </div>
         </div>
       )}

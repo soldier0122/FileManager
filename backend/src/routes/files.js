@@ -107,4 +107,78 @@ router.put('/update', authenticateToken, async (req, res) => {
     }
 });
 
+// DELETE /api/files/delete
+router.delete('/delete', authenticateToken, async (req, res) => {
+    try {
+        const { filePath } = req.body;
+        if (!filePath) return res.status(400).json({ error: 'File path required' });
+
+        const targetPath = getSafePath(filePath);
+        
+        // fs.rm with recursive handles both files and non-empty folders
+        await fs.rm(targetPath, { recursive: true, force: true });
+        res.json({ message: 'Deleted successfully' });
+    } catch (error) {
+        console.error('Delete error:', error);
+        res.status(500).json({ error: 'Failed to delete item' });
+    }
+});
+
+// PUT /api/files/rename
+router.put('/rename', authenticateToken, async (req, res) => {
+    try {
+        const { oldPath, newName } = req.body;
+        if (!oldPath || !newName) return res.status(400).json({ error: 'Missing parameters' });
+
+        const targetPath = getSafePath(oldPath);
+        const dir = path.dirname(targetPath);
+        const newTargetPath = path.join(dir, newName);
+        
+        // Ensure the new path doesn't escape the storage root
+        if (!newTargetPath.startsWith(STORAGE_ROOT)) throw new Error('Out of bounds');
+
+        await fs.rename(targetPath, newTargetPath);
+        res.json({ message: 'Renamed successfully' });
+    } catch (error) {
+        console.error('Rename error:', error);
+        res.status(500).json({ error: 'Failed to rename item' });
+    }
+});
+
+// POST /api/files/copy
+router.post('/copy', authenticateToken, async (req, res) => {
+    try {
+        const { sourcePath, destinationDir } = req.body;
+        if (!sourcePath) return res.status(400).json({ error: 'Source path required' });
+
+        const src = getSafePath(sourcePath);
+        // Create the new path by placing the source file's name inside the destination directory
+        const dest = getSafePath(path.join(destinationDir || '', path.basename(src)));
+
+        // fs.cp handles copying both files and directories
+        await fs.cp(src, dest, { recursive: true });
+        res.json({ message: 'Copied successfully' });
+    } catch (error) {
+        console.error('Copy error:', error);
+        res.status(500).json({ error: 'Failed to copy item' });
+    }
+});
+
+// GET /api/files/download?path=...
+// This serves the raw file directly (great for images, videos, and downloading)
+router.get('/download', authenticateToken, (req, res) => {
+    try {
+        const relativePath = req.query.path;
+        if (!relativePath) return res.status(400).json({ error: 'Path required' });
+
+        const targetPath = getSafePath(relativePath);
+        
+        // res.sendFile automatically handles mime-types and binary streaming
+        res.sendFile(targetPath);
+    } catch (error) {
+        console.error('Download error:', error);
+        res.status(500).json({ error: 'Failed to download file' });
+    }
+});
+
 module.exports = router;
