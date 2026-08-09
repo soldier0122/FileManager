@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import RegisterForm from './components/RegisterForm';
 import LoginForm from './components/LoginForm';
 import Dashboard from './components/Dashboard';
+import SettingsMenu from './components/SettingsMenu';
 import './App.css'; 
 
 function App() {
@@ -38,35 +39,66 @@ function App() {
     setAppState('login');
   };
 
-  if (appState === 'loading') return <div>Connecting to server...</div>;
-  if (appState === 'error') return <div>Error connecting to the backend. Is it running?</div>;
-
-  // We remove the standard app-container wrapper ONLY for the dashboard so it can grow wider
-  if (appState === 'dashboard') {
+  if (appState === 'loading') {
     return (
-      <div className="app-container" style={{ maxWidth: '800px' }}>
-        <Dashboard onLogout={handleLogout} />
+      <div className="status-screen">
+        <div className="status-card">
+          <span className="brand-mark" aria-hidden="true">📁</span>
+          <p className="status-text">Connecting to server…</p>
+        </div>
       </div>
     );
   }
 
-  return (
-    <div className="app-container">
-      {appState === 'register' && 
-        <div>
-          <h2>Initial Setup</h2>
-          <p>Welcome! Create the master admin account to secure your file manager.</p>
-          <RegisterForm onRegistered={() => setAppState('login')} />
+  if (appState === 'error') {
+    return (
+      <div className="status-screen">
+        <div className="status-card status-card-error">
+          <span className="brand-mark" aria-hidden="true">⚠️</span>
+          <p className="status-text">Couldn't reach the backend. Is it running?</p>
         </div>
-      }
+      </div>
+    );
+  }
 
-      {appState === 'login' && 
-        <div>
-          <h2>Login</h2>
-          <LoginForm onLogin={() => setAppState('dashboard')} />
+  // We remove the standard app-container wrapper ONLY for the dashboard so it can grow wider
+  if (appState === 'dashboard') {
+    return (
+      <>
+        <SettingsMenu />
+        <div className="app-container app-container-wide">
+          <Dashboard onLogout={handleLogout} />
         </div>
-      }
-    </div>
+      </>
+    );
+  }
+
+  return (
+    <>
+      <SettingsMenu />
+      <div className="app-container">
+        <div className="brand-header">
+          <span className="brand-mark" aria-hidden="true">📁</span>
+          <span className="brand-name">File Manager</span>
+        </div>
+
+        {appState === 'register' &&
+          <div>
+            <h2>Initial Setup</h2>
+            <p>Welcome! Create the master admin account to secure your file manager.</p>
+            <RegisterForm onRegistered={() => setAppState('login')} />
+          </div>
+        }
+
+        {appState === 'login' &&
+          <div>
+            <h2>Welcome back</h2>
+            <p>Sign in to access your files.</p>
+            <LoginForm onLogin={() => setAppState('dashboard')} />
+          </div>
+        }
+      </div>
+    </>
   );
 }
 

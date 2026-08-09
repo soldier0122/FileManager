@@ -2,14 +2,36 @@ import { useState, useEffect, useRef } from 'react';
 import Editor from '@monaco-editor/react';
 
 const getFileInfo = (filename) => {
+  if (!filename.includes('.')) return { type: 'misc', icon: '🧩' };
+  
   const ext = filename.split('.').pop().toLowerCase();
+  
+  // Custom SVG Generator for Office Files
+  const getOfficeIcon = (color, letter) => (
+    <svg viewBox="0 0 24 24" width="1em" height="1em" style={{ color }} fill="currentColor">
+      <path d="M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6z" />
+      <text x="12" y="17" fill="white" fontSize="9" fontWeight="bold" fontFamily="sans-serif" textAnchor="middle">{letter}</text>
+    </svg>
+  );
+
+  // Office Suite
+  if (['doc', 'docx', 'rtf'].includes(ext)) return { type: 'word', icon: getOfficeIcon('#185abd', 'W') };
+  if (['xls', 'xlsx', 'csv'].includes(ext)) return { type: 'excel', icon: getOfficeIcon('#107c41', 'X') };
+  if (['ppt', 'pptx'].includes(ext)) return { type: 'powerpoint', icon: getOfficeIcon('#c13b1b', 'P') };
+  
+  // Standard Media
   if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg'].includes(ext)) return { type: 'image', icon: '🖼️' };
   if (['mp4', 'webm', 'mkv', 'avi'].includes(ext)) return { type: 'video', icon: '🎥' };
   if (['mp3', 'wav', 'ogg'].includes(ext)) return { type: 'audio', icon: '🎵' };
   if (['zip', 'rar', 'tar', 'gz', '7z'].includes(ext)) return { type: 'archive', icon: '📦' };
   if (['pdf'].includes(ext)) return { type: 'pdf', icon: '📕' };
   if (['js', 'jsx', 'ts', 'tsx', 'py', 'json', 'html', 'css', 'lua'].includes(ext)) return { type: 'code', icon: '📝' };
-  return { type: 'text', icon: '📄' };
+  
+  // Misc
+  if (['txt', 'md', 'log', 'env'].includes(ext)) return { type: 'text', icon: '📄' };
+  if (['exe', 'msi', 'bat', 'sh', 'bin'].includes(ext)) return { type: 'executable', icon: '⚙️' };
+  
+  return { type: 'misc', icon: '🧩' };
 };
 
 export default function Dashboard({ onLogout }) {
@@ -348,7 +370,7 @@ export default function Dashboard({ onLogout }) {
             return (
               <div 
                 key={index} 
-                className={`file-tile ${isDragOver ? 'drag-over' : ''}`}
+                className={`file-tile ${file.isDirectory ? 'is-folder' : ''} ${isDragOver ? 'drag-over' : ''}`}
                 draggable={true}
                 onDragStart={(e) => handleDragStart(e, file)}
                 onDragOver={file.isDirectory ? (e) => handleDragOver(e, file.path) : null}
