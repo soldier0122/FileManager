@@ -4,7 +4,7 @@ import Editor from '@monaco-editor/react';
 const getFileInfo = (filename) => {
   const ext = filename.split('.').pop().toLowerCase();
   if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg'].includes(ext)) return { type: 'image', icon: '🖼️' };
-  if (['mp4', 'webm', 'mkv', 'avi'].includes(ext)) return { type: 'video', icon: '🎥' };
+  if (['mp4', 'webm', 'mkv', 'avi'].includes(ext)) return { type: 'video', icon: '🎬' };
   if (['mp3', 'wav', 'ogg'].includes(ext)) return { type: 'audio', icon: '🎵' };
   if (['zip', 'rar', 'tar', 'gz', '7z'].includes(ext)) return { type: 'archive', icon: '📦' };
   if (['pdf'].includes(ext)) return { type: 'pdf', icon: '📕' };
@@ -13,6 +13,7 @@ const getFileInfo = (filename) => {
 };
 
 export default function Dashboard({ onLogout }) {
+  const [uploadStats, setUploadStats] = useState({ progress: 0, eta: '', speed: '' });
   const [files, setFiles] = useState([]);
   const [currentPath, setCurrentPath] = useState(() => sessionStorage.getItem('vps_currentPath') || '');
   const [error, setError] = useState('');
@@ -72,9 +73,10 @@ export default function Dashboard({ onLogout }) {
   // Sends a batch of { file, relativePath } entries. relativePath preserves
   // any folder structure (e.g. "notes/week1/lecture.pdf") so the backend can
   // recreate it under the current directory instead of flattening everything.
-  const performUpload = async (entries) => {
+const performUpload = async (entries) => {
     if (!entries || entries.length === 0) return;
     setIsUploading(true);
+    setUploadStats({ progress: 0, eta: 'Calculating...', speed: '' });
 
     const formData = new FormData();
     formData.append('currentPath', currentPath);
@@ -85,24 +87,67 @@ export default function Dashboard({ onLogout }) {
     });
     formData.append('relativePaths', JSON.stringify(relativePaths));
 
-    try {
-      const token = localStorage.getItem('vps_token');
-      const res = await fetch('/api/files/upload', {
-        method: 'POST',
-        headers: { 'Authorization': `Bearer ${token}` }, 
-        // Note: Do NOT set Content-Type for FormData. The browser sets it automatically with the correct boundary boundary!
-        body: formData
-      });
+    const token = localStorage.getItem('vps_token');
+    const startTime = Date.now();
+
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', '/api/files/upload', true);
+      xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+      // Do NOT set Content-Type; XHR handles the FormData boundary automatically
+
+      xhr.upload.onprogress = (event) => {
+        if (event.lengthComputable) {
+          const progress = Math.round((event.loaded / event.total) * 100);
+          const timeElapsed = (Date.now() - startTime) / 1000; // in seconds
+          
+          let eta = 'Calculating...';
+          let speed = '';
+
+          // Wait half a second before calculating to avoid infinity errors
+          if (timeElapsed > 0.5 && event.loaded > 0) {
+            const speedBps = event.loaded / timeElapsed;
+            const bytesRemaining = event.total - event.loaded;
+            const secondsRemaining = Math.round(bytesRemaining / speedBps);
+            
+            // Format ETA
+            if (secondsRemaining > 60) {
+              eta = `${Math.floor(secondsRemaining / 60)}m ${secondsRemaining % 60}s left`;
+            } else {
+              eta = `${secondsRemaining}s left`;
+            }
+
+            // Format Speed
+            if (speedBps > 1024 * 1024) speed = (speedBps / (1024 * 1024)).toFixed(1) + ' MB/s';
+            else speed = (speedBps / 1024).toFixed(1) + ' KB/s';
+          }
+
+          setUploadStats({ progress, eta, speed });
+        }
+      };
+
+      xhr.onload = () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          fetchFiles(currentPath);
+          resolve();
+        } else {
+          let errMessage = 'Failed to upload';
+          try { errMessage = JSON.parse(xhr.responseText).error || errMessage; } catch (e) {}
+          reject(new Error(errMessage));
+        }
+      };
+
+      xhr.onerror = () => reject(new Error('Network error during upload'));
       
-      if (!res.ok) throw new Error((await res.json()).error || 'Failed to upload');
-      fetchFiles(currentPath);
-    } catch (err) {
-      alert(err.message);
-    } finally {
-      setIsUploading(false);
-      if (fileInputRef.current) fileInputRef.current.value = '';
-      if (folderInputRef.current) folderInputRef.current.value = '';
-    }
+      xhr.onloadend = () => {
+        setIsUploading(false);
+        setUploadStats({ progress: 0, eta: '', speed: '' });
+        if (fileInputRef.current) fileInputRef.current.value = '';
+        if (folderInputRef.current) folderInputRef.current.value = '';
+      };
+
+      xhr.send(formData);
+    }).catch(err => alert(err.message));
   };
 
   // Used by the plain file <input> and the folder <input webkitdirectory>.
@@ -425,6 +470,18 @@ export default function Dashboard({ onLogout }) {
           <button className="action-btn" onClick={() => setModal({ isOpen: true, type: 'text', input: '' })}>+ File</button>
         </div>
       </div>
+
+      {isUploading && (
+              <div style={{ padding: '14px', backgroundColor: 'var(--surface-alt)', borderRadius: 'var(--radius-md)', border: '1px solid var(--border)', marginBottom: '20px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '10px', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+                  <span style={{ fontWeight: '500', color: 'var(--text-primary)' }}>Uploading... {uploadStats.progress}%</span>
+                  <span style={{ fontFamily: 'var(--font-mono)' }}>{uploadStats.speed} &nbsp;&bull;&nbsp; {uploadStats.eta}</span>
+                </div>
+                <div style={{ width: '100%', backgroundColor: 'var(--bg-elevated)', borderRadius: '4px', overflow: 'hidden', height: '6px' }}>
+                  <div style={{ width: `${uploadStats.progress}%`, backgroundColor: 'var(--accent)', height: '100%', transition: 'width 0.2s linear' }} />
+                </div>
+              </div>
+            )}
 
       <div className="explorer-body">
         {error && <div className="error-message">{error}</div>}
