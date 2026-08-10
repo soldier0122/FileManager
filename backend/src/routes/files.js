@@ -1,8 +1,6 @@
-const multer = require('multer');
-const os = require('os');
-const upload = multer({ dest: os.tmpdir() });
-const { ZipArchive } = require('archiver');
 const express = require('express');
+const multer = require('multer');
+const { ZipArchive } = require('archiver');
 const fs = require('fs/promises');
 const path = require('path');
 const authenticateToken = require('../middleware/auth');
@@ -12,6 +10,8 @@ const router = express.Router();
 const STORAGE_ROOT = process.env.STORAGE_ROOT 
     ? path.resolve(process.env.STORAGE_ROOT) 
     : path.resolve(__dirname, '../../storage');
+
+const upload = multer({ dest: path.join(STORAGE_ROOT, '.tmp') });
 
 const getSafePath = (userPath) => {
     const targetPath = path.resolve(STORAGE_ROOT, userPath || '');
