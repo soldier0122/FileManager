@@ -256,9 +256,36 @@ router.post('/upload', authenticateToken, upload.array('files'), async (req, res
         
         await fs.mkdir(targetDir, { recursive: true });
 
+        // relativePaths (JSON array, same order/length as req.files) lets the
+        // frontend preserve folder structure for whole-folder uploads, e.g.
+        // "MyFolder/notes/week1.pdf". Falls back to the flat filename for
+        // plain single/multi-file uploads or if the field is missing/malformed.
+        let relativePaths = [];
+        if (req.body.relativePaths) {
+            try {
+                const parsed = JSON.parse(req.body.relativePaths);
+                if (Array.isArray(parsed)) relativePaths = parsed;
+            } catch {
+                relativePaths = [];
+            }
+        }
+
         // Loop through all uploaded files and move them from the temp folder to storage
-        for (const file of req.files) {
-            const destPath = getSafePath(path.join(currentPath, file.originalname));
+        for (let i = 0; i < req.files.length; i++) {
+            const file = req.files[i];
+            const rawRelPath = (typeof relativePaths[i] === 'string' && relativePaths[i])
+                ? relativePaths[i]
+                : file.originalname;
+
+            // Normalize slashes and strip any leading "../" segments so a
+            // maliciously-crafted relative path can't escape the current
+            // directory. getSafePath() below is the authoritative sandbox
+            // check; this is just belt-and-braces.
+            const safeRelPath = path.normalize(rawRelPath).replace(/^(\.\.[/\\])+/, '');
+            const destPath = getSafePath(path.join(currentPath, safeRelPath));
+
+            // Recreate any subfolders the relative path implies before copying.
+            await fs.mkdir(path.dirname(destPath), { recursive: true });
             await fs.copyFile(file.path, destPath);
             await fs.unlink(file.path); // Clean up the temp file
         }

@@ -2,36 +2,14 @@ import { useState, useEffect, useRef } from 'react';
 import Editor from '@monaco-editor/react';
 
 const getFileInfo = (filename) => {
-  if (!filename.includes('.')) return { type: 'misc', icon: '🧩' };
-  
   const ext = filename.split('.').pop().toLowerCase();
-  
-  // Custom SVG Generator for Office Files
-  const getOfficeIcon = (color, letter) => (
-    <svg viewBox="0 0 24 24" width="1em" height="1em" style={{ color }} fill="currentColor">
-      <path d="M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6z" />
-      <text x="12" y="17" fill="white" fontSize="9" fontWeight="bold" fontFamily="sans-serif" textAnchor="middle">{letter}</text>
-    </svg>
-  );
-
-  // Office Suite
-  if (['doc', 'docx', 'rtf'].includes(ext)) return { type: 'word', icon: getOfficeIcon('#185abd', 'W') };
-  if (['xls', 'xlsx', 'csv'].includes(ext)) return { type: 'excel', icon: getOfficeIcon('#107c41', 'X') };
-  if (['ppt', 'pptx'].includes(ext)) return { type: 'powerpoint', icon: getOfficeIcon('#c13b1b', 'P') };
-  
-  // Standard Media
   if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg'].includes(ext)) return { type: 'image', icon: '🖼️' };
   if (['mp4', 'webm', 'mkv', 'avi'].includes(ext)) return { type: 'video', icon: '🎥' };
   if (['mp3', 'wav', 'ogg'].includes(ext)) return { type: 'audio', icon: '🎵' };
   if (['zip', 'rar', 'tar', 'gz', '7z'].includes(ext)) return { type: 'archive', icon: '📦' };
   if (['pdf'].includes(ext)) return { type: 'pdf', icon: '📕' };
   if (['js', 'jsx', 'ts', 'tsx', 'py', 'json', 'html', 'css', 'lua'].includes(ext)) return { type: 'code', icon: '📝' };
-  
-  // Misc
-  if (['txt', 'md', 'log', 'env'].includes(ext)) return { type: 'text', icon: '📄' };
-  if (['exe', 'msi', 'bat', 'sh', 'bin'].includes(ext)) return { type: 'executable', icon: '⚙️' };
-  
-  return { type: 'misc', icon: '🧩' };
+  return { type: 'text', icon: '📄' };
 };
 
 export default function Dashboard({ onLogout }) {
@@ -51,6 +29,7 @@ export default function Dashboard({ onLogout }) {
   const [dragOverTarget, setDragOverTarget] = useState(null);
   
   const fileInputRef = useRef(null);
+  const folderInputRef = useRef(null);
 
   useEffect(() => {
     sessionStorage.setItem('vps_currentPath', currentPath);
@@ -90,13 +69,21 @@ export default function Dashboard({ onLogout }) {
   const parentPath = currentPath ? currentPath.split('/').slice(0, -1).join('/') : null;
 
   // --- Upload Logic ---
-  const uploadFiles = async (fileList) => {
-    if (!fileList || fileList.length === 0) return;
+  // Sends a batch of { file, relativePath } entries. relativePath preserves
+  // any folder structure (e.g. "notes/week1/lecture.pdf") so the backend can
+  // recreate it under the current directory instead of flattening everything.
+  const performUpload = async (entries) => {
+    if (!entries || entries.length === 0) return;
     setIsUploading(true);
-    
+
     const formData = new FormData();
     formData.append('currentPath', currentPath);
-    Array.from(fileList).forEach(file => formData.append('files', file));
+    const relativePaths = [];
+    entries.forEach(({ file, relativePath }) => {
+      formData.append('files', file);
+      relativePaths.push(relativePath || file.name);
+    });
+    formData.append('relativePaths', JSON.stringify(relativePaths));
 
     try {
       const token = localStorage.getItem('vps_token');
@@ -114,7 +101,73 @@ export default function Dashboard({ onLogout }) {
     } finally {
       setIsUploading(false);
       if (fileInputRef.current) fileInputRef.current.value = '';
+      if (folderInputRef.current) folderInputRef.current.value = '';
     }
+  };
+
+  // Used by the plain file <input> and the folder <input webkitdirectory>.
+  // When a folder is picked via the input, the browser fills in
+  // file.webkitRelativePath (e.g. "MyFolder/notes.txt") automatically.
+  const uploadFiles = (fileList) => {
+    if (!fileList || fileList.length === 0) return;
+    const entries = Array.from(fileList).map(file => ({
+      file,
+      relativePath: file.webkitRelativePath || file.name
+    }));
+    return performUpload(entries);
+  };
+
+  // Recursively walks a DataTransfer's items to support dragging entire
+  // folders in from the OS. Falls back to the flat file list for browsers
+  // without the (widely supported) FileSystem Entry API.
+  const collectEntriesFromDataTransfer = async (dataTransfer) => {
+    const items = dataTransfer.items;
+    if (!items || !items.length || !items[0].webkitGetAsEntry) {
+      return Array.from(dataTransfer.files).map(file => ({ file, relativePath: file.name }));
+    }
+
+    const topEntries = [];
+    for (let i = 0; i < items.length; i++) {
+      const entry = items[i].webkitGetAsEntry && items[i].webkitGetAsEntry();
+      if (entry) topEntries.push(entry);
+    }
+
+    if (topEntries.length === 0) {
+      return Array.from(dataTransfer.files).map(file => ({ file, relativePath: file.name }));
+    }
+
+    const entries = [];
+
+    const readDirectory = (dirEntry) => new Promise((resolve, reject) => {
+      const reader = dirEntry.createReader();
+      let all = [];
+      const readBatch = () => {
+        reader.readEntries((batch) => {
+          if (!batch.length) { resolve(all); return; }
+          all = all.concat(batch);
+          readBatch();
+        }, reject);
+      };
+      readBatch();
+    });
+
+    const walk = async (entry, prefix) => {
+      if (entry.isFile) {
+        const file = await new Promise((resolve, reject) => entry.file(resolve, reject));
+        entries.push({ file, relativePath: prefix + entry.name });
+      } else if (entry.isDirectory) {
+        const children = await readDirectory(entry);
+        for (const child of children) {
+          await walk(child, `${prefix}${entry.name}/`);
+        }
+      }
+    };
+
+    for (const entry of topEntries) {
+      await walk(entry, '');
+    }
+
+    return entries;
   };
 
   // --- Drag and Drop Handlers ---
@@ -148,9 +201,10 @@ export default function Dashboard({ onLogout }) {
     e.stopPropagation();
     setDragOverTarget(null);
 
-    // 1. Handle External File Drop (from Windows/Mac)
+    // 1. Handle External File Drop (from Windows/Mac), including whole folders
     if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-      await uploadFiles(e.dataTransfer.files);
+      const entries = await collectEntriesFromDataTransfer(e.dataTransfer);
+      await performUpload(entries);
       return;
     }
 
@@ -271,7 +325,7 @@ export default function Dashboard({ onLogout }) {
     const lang = editorState.filePath.split('.').pop().toLowerCase();
     const map = { js: 'javascript', json: 'json', html: 'html', css: 'css', py: 'python', lua: 'lua' };
     return (
-      <div className="dashboard-container" style={{ display: 'flex', flexDirection: 'column', height: '80vh' }}>
+      <div className="dashboard-container editor-view">
         <div className="controls-bar" style={{ marginBottom: '10px' }}>
           <span>Editing: {editorState.filePath}</span>
           <div className="action-buttons">
@@ -279,7 +333,7 @@ export default function Dashboard({ onLogout }) {
             <button className="action-btn" onClick={saveFile} disabled={editorState.isSaving}>Save</button>
           </div>
         </div>
-        <div style={{ flexGrow: 1, border: '1px solid #333', borderRadius: '8px', overflow: 'hidden' }}>
+        <div className="editor-shell">
           <Editor height="100%" theme="vs-dark" language={map[lang] || 'plaintext'} value={editorState.content} onChange={v => setEditorState(prev => ({ ...prev, content: v }))} options={{ minimap: { enabled: false } }} />
         </div>
       </div>
@@ -348,58 +402,78 @@ export default function Dashboard({ onLogout }) {
           <button className="action-btn" style={{ backgroundColor: '#0056b3' }} onClick={() => fileInputRef.current.click()} disabled={isUploading}>
             {isUploading ? 'Uploading...' : '⬆️ Upload'}
           </button>
+
+          {/* Hidden Folder Input & Upload Folder Button. webkitdirectory is
+              a de-facto standard supported by all major browsers; it makes
+              the OS picker choose a folder and populates each File's
+              webkitRelativePath so the backend can rebuild the structure. */}
+          <input 
+            type="file" 
+            webkitdirectory=""
+            directory=""
+            mozdirectory=""
+            multiple 
+            ref={folderInputRef} 
+            style={{ display: 'none' }} 
+            onChange={(e) => uploadFiles(e.target.files)} 
+          />
+          <button className="action-btn" style={{ backgroundColor: '#0056b3' }} onClick={() => folderInputRef.current.click()} disabled={isUploading}>
+            {isUploading ? 'Uploading...' : '📁 Upload Folder'}
+          </button>
           
           <button className="action-btn" onClick={() => setModal({ isOpen: true, type: 'folder', input: '' })}>+ Folder</button>
           <button className="action-btn" onClick={() => setModal({ isOpen: true, type: 'text', input: '' })}>+ File</button>
         </div>
       </div>
 
-      {error && <div className="error-message">{error}</div>}
-      
-      {loading ? ( <div className="loading-state">Loading...</div> ) : (
-        <div 
-          className={`file-grid ${dragOverTarget === 'GRID' ? 'drag-over' : ''}`}
-          onDragOver={(e) => handleDragOver(e, null)} // Pass null so it defaults to 'GRID' logic
-          onDragLeave={handleDragLeave}
-          onDrop={(e) => handleDrop(e, currentPath)} // Drop OS files into the current open folder
-        >
-          {files.map((file, index) => {
-            const info = file.isDirectory ? { icon: '📁' } : getFileInfo(file.name);
-            const isDragOver = dragOverTarget === file.path;
-            
-            return (
-              <div 
-                key={index} 
-                className={`file-tile ${file.isDirectory ? 'is-folder' : ''} ${isDragOver ? 'drag-over' : ''}`}
-                draggable={true}
-                onDragStart={(e) => handleDragStart(e, file)}
-                onDragOver={file.isDirectory ? (e) => handleDragOver(e, file.path) : null}
-                onDragLeave={file.isDirectory ? handleDragLeave : null}
-                onDrop={file.isDirectory ? (e) => handleDrop(e, file.path) : null}
-                onClick={(e) => { e.stopPropagation(); handleAction('open', file); }}
-                onContextMenu={(e) => {
-                  e.preventDefault(); 
-                  setContextMenu({ visible: true, x: e.pageX, y: e.pageY, file });
-                }}
-              >
-                <div className="icon">{info.icon}</div>
-                <div className="name">{file.name}</div>
-              </div>
-            );
-          })}
-        </div>
-      )}
-      
-      {!loading && files.length === 0 && (
-        <div 
-          className={`empty-state ${dragOverTarget === 'GRID' ? 'drag-over' : ''}`}
-          onDragOver={(e) => handleDragOver(e, null)}
-          onDragLeave={handleDragLeave}
-          onDrop={(e) => handleDrop(e, currentPath)}
-        >
-          This folder is empty. Drag files here to upload.
-        </div>
-      )}
+      <div className="explorer-body">
+        {error && <div className="error-message">{error}</div>}
+
+        {loading ? ( <div className="loading-state">Loading...</div> ) : (
+          <div 
+            className={`file-grid ${dragOverTarget === 'GRID' ? 'drag-over' : ''}`}
+            onDragOver={(e) => handleDragOver(e, null)} // Pass null so it defaults to 'GRID' logic
+            onDragLeave={handleDragLeave}
+            onDrop={(e) => handleDrop(e, currentPath)} // Drop OS files into the current open folder
+          >
+            {files.map((file, index) => {
+              const info = file.isDirectory ? { icon: '📁' } : getFileInfo(file.name);
+              const isDragOver = dragOverTarget === file.path;
+              
+              return (
+                <div 
+                  key={index} 
+                  className={`file-tile ${file.isDirectory ? 'is-folder' : ''} ${isDragOver ? 'drag-over' : ''}`}
+                  draggable={true}
+                  onDragStart={(e) => handleDragStart(e, file)}
+                  onDragOver={file.isDirectory ? (e) => handleDragOver(e, file.path) : null}
+                  onDragLeave={file.isDirectory ? handleDragLeave : null}
+                  onDrop={file.isDirectory ? (e) => handleDrop(e, file.path) : null}
+                  onClick={(e) => { e.stopPropagation(); handleAction('open', file); }}
+                  onContextMenu={(e) => {
+                    e.preventDefault(); 
+                    setContextMenu({ visible: true, x: e.pageX, y: e.pageY, file });
+                  }}
+                >
+                  <div className="icon">{info.icon}</div>
+                  <div className="name">{file.name}</div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+        
+        {!loading && files.length === 0 && (
+          <div 
+            className={`empty-state ${dragOverTarget === 'GRID' ? 'drag-over' : ''}`}
+            onDragOver={(e) => handleDragOver(e, null)}
+            onDragLeave={handleDragLeave}
+            onDrop={(e) => handleDrop(e, currentPath)}
+          >
+            This folder is empty. Drag files or folders here to upload.
+          </div>
+        )}
+      </div>
 
       {contextMenu.visible && (
         <div className="context-menu" style={{ top: contextMenu.y, left: contextMenu.x }} onClick={(e) => e.stopPropagation()}>
