@@ -522,8 +522,14 @@ button:disabled {
   border-radius: var(--radius-sm);
   border: 1px solid var(--border);
   cursor: pointer;
-  transition: transform 0.15s var(--ease), border-color 0.15s var(--ease), background-color 0.15s var(--ease);
+  transition: transform 0.15s var(--ease), border-color 0.15s var(--ease), background-color 0.15s var(--ease), box-shadow 0.15s var(--ease), opacity 0.15s var(--ease);
   user-select: none;
+  /* Mobile long-press support: let taps/scrolling behave normally, but
+     stop the OS's own text-selection/callout UI from appearing during a
+     long-press, since we render our own context menu instead. */
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  touch-action: manipulation;
 }
 
 /* A small manila-folder tab notch, drawn in the accent color — the one
@@ -557,6 +563,62 @@ button:disabled {
   text-align: center;
   word-break: break-word;
   line-height: 1.25;
+}
+
+/* Long-press "lifted" state: the tile has been held past the threshold but
+   the gesture hasn't resolved into a menu-open or a drag yet. Mirrors the
+   iOS/Android "haptic touch" pop. */
+.file-tile.touch-pressed {
+  transform: scale(1.06);
+  box-shadow: var(--shadow-md);
+  border-color: var(--accent);
+  z-index: 5;
+}
+
+/* Once the hold turns into a drag, the source tile stays in place but dims,
+   while the floating .touch-drag-ghost (below) follows the finger. */
+.file-tile.touch-dragging {
+  opacity: 0.35;
+  touch-action: none;
+}
+
+/* ---------- Touch drag ghost ---------- */
+
+/* Floating preview of the item being moved, positioned at the finger via
+   inline top/left in JS. pointer-events: none so it never itself becomes
+   the target under document.elementFromPoint(). */
+.touch-drag-ghost {
+  position: fixed;
+  top: 0;
+  left: 0;
+  pointer-events: none;
+  z-index: 3000;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  width: 104px;
+  padding: 14px 8px;
+  background-color: var(--surface-alt);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-lg);
+  transform: translate(-50%, -50%) scale(1.08);
+  opacity: 0.95;
+}
+
+.touch-drag-ghost .icon {
+  font-size: 2.2rem;
+  margin-bottom: 6px;
+}
+
+.touch-drag-ghost .name {
+  font-size: 0.75rem;
+  color: var(--text-primary);
+  text-align: center;
+  word-break: break-word;
+  line-height: 1.2;
+  max-width: 100%;
 }
 
 /* ---------- Modals ---------- */

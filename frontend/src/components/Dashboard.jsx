@@ -12,16 +12,16 @@ const getFileInfo = (filename) => {
   return { type: 'text', icon: '📄' };
 };
 
-// --- Touch long-press tuning ---
-// Holding a tile for TOUCH_MENU_DELAY_MS opens the context menu (mirrors
-// desktop right-click). Continuing to hold past TOUCH_DRAG_DELAY_MS instead
-// cancels the menu and arms "move" mode, which is finalized on release
-// wherever the finger currently is. Moving the finger more than
-// TOUCH_MOVE_CANCEL_PX before either timer fires cancels both (treated as a
-// scroll/swipe, not a hold).
-const TOUCH_MENU_DELAY_MS = 380;
-const TOUCH_DRAG_DELAY_MS = 750;
-const TOUCH_MOVE_CANCEL_PX = 10;
+// --- Touch long-press tuning (single-threshold pattern) ---
+// One timer decides everything: hold a tile for LONG_PRESS_MS and it "lifts"
+// (haptic + scale/shadow). What happens next depends on motion, not more
+// waiting: hold still and release -> context menu; start moving your finger
+// -> the item becomes draggable and follows you until you let go.
+const LONG_PRESS_MS = 500;
+const PRE_PRESS_CANCEL_PX = 10; // movement before the threshold cancels the whole gesture (it's a scroll)
+const DRAG_START_PX = 8;        // movement after the threshold commits to a drag
+const AUTO_SCROLL_EDGE_PX = 48; // how close to the list's top/bottom edge triggers auto-scroll
+const AUTO_SCROLL_SPEED = 10;   // px per animation frame while auto-scrolling
 
 export default function Dashboard({ onLogout }) {
   const [uploadStats, setUploadStats] = useState({ progress: 0, eta: '', speed: '' });
@@ -39,23 +39,28 @@ export default function Dashboard({ onLogout }) {
 
   const [draggedItem, setDraggedItem] = useState(null);
   const [dragOverTarget, setDragOverTarget] = useState(null);
-  // Path of the item currently being moved via touch (drives the "lifted"
-  // visual state on its tile, separate from mouse-based draggedItem so we
-  // can style them identically without conflating the two input modes).
-  const [touchDragPath, setTouchDragPath] = useState(null);
+
+  // Touch-only state. touchGesture drives the tile's visual state:
+  // { path, mode: 'pressed' | 'dragging' } while a long-press is in
+  // progress, or null otherwise. dragGhost is the floating preview that
+  // follows the finger once a drag has actually started.
+  const [touchGesture, setTouchGesture] = useState(null);
+  const [dragGhost, setDragGhost] = useState(null);
 
   const fileInputRef = useRef(null);
   const folderInputRef = useRef(null);
+  const explorerBodyRef = useRef(null);
 
-  // Holds the in-progress touch gesture: { x, y, pageX, pageY, file, moved,
-  // menuFired, dragFired, menuTimer, dragTimer }. Null when no finger is down
-  // on a tile. A ref (not state) because timers need to read/cancel it
-  // without waiting on a render cycle.
+  // Bookkeeping for the in-progress touch gesture, kept in a ref (not state)
+  // so timers and touchmove handlers can read/mutate it without waiting on
+  // renders: { startX, startY, file, info, rect, pressed, dragging, timer }.
   const touchDataRef = useRef(null);
-  // When a long-press already opened the menu or armed dragging, the
+  // When a long-press already opened the menu or started a drag, the
   // browser's trailing synthetic "click" on release must be swallowed so we
-  // don't also open the file/folder. Checked once per click, then reset.
+  // don't also open the file/folder.
   const suppressClickRef = useRef(false);
+  const autoScrollRAFRef = useRef(null);
+  const autoScrollDirRef = useRef(0);
 
   useEffect(() => {
     sessionStorage.setItem('vps_currentPath', currentPath);
@@ -68,13 +73,11 @@ export default function Dashboard({ onLogout }) {
     return () => document.removeEventListener('click', handleClick);
   }, []);
 
-  // Clean up any pending long-press timers if the component unmounts mid-gesture.
+  // Clean up any pending timers/animation frames if the component unmounts mid-gesture.
   useEffect(() => {
     return () => {
-      if (touchDataRef.current) {
-        clearTimeout(touchDataRef.current.menuTimer);
-        clearTimeout(touchDataRef.current.dragTimer);
-      }
+      if (touchDataRef.current) clearTimeout(touchDataRef.current.timer);
+      if (autoScrollRAFRef.current) cancelAnimationFrame(autoScrollRAFRef.current);
     };
   }, []);
 
@@ -314,45 +317,64 @@ const performUpload = async (entries) => {
     setDraggedItem(null);
   };
 
-  // --- Touch Handlers (mobile long-press: short hold = menu, longer = move) ---
-  const handleTouchStart = (e, file) => {
+  // --- Touch auto-scroll while dragging near the list's edges ---
+  const updateAutoScroll = (clientY) => {
+    const container = explorerBodyRef.current;
+    if (!container) return;
+    const rect = container.getBoundingClientRect();
+    let dir = 0;
+    if (clientY < rect.top + AUTO_SCROLL_EDGE_PX) dir = -1;
+    else if (clientY > rect.bottom - AUTO_SCROLL_EDGE_PX) dir = 1;
+    autoScrollDirRef.current = dir;
+
+    if (dir !== 0 && !autoScrollRAFRef.current) {
+      const step = () => {
+        const c = explorerBodyRef.current;
+        if (!c || autoScrollDirRef.current === 0) { autoScrollRAFRef.current = null; return; }
+        c.scrollTop += AUTO_SCROLL_SPEED * autoScrollDirRef.current;
+        autoScrollRAFRef.current = requestAnimationFrame(step);
+      };
+      autoScrollRAFRef.current = requestAnimationFrame(step);
+    } else if (dir === 0 && autoScrollRAFRef.current) {
+      cancelAnimationFrame(autoScrollRAFRef.current);
+      autoScrollRAFRef.current = null;
+    }
+  };
+
+  const stopAutoScroll = () => {
+    autoScrollDirRef.current = 0;
+    if (autoScrollRAFRef.current) {
+      cancelAnimationFrame(autoScrollRAFRef.current);
+      autoScrollRAFRef.current = null;
+    }
+  };
+
+  // --- Touch Handlers (single-threshold long-press: hold-still -> menu, hold-and-move -> drag) ---
+  const handleTouchStart = (e, file, info) => {
     if (e.touches.length !== 1) return; // ignore multi-touch (pinch/scroll gestures)
 
     const touch = e.touches[0];
     suppressClickRef.current = false;
+    const rect = e.currentTarget.getBoundingClientRect();
 
     const data = {
-      x: touch.clientX,
-      y: touch.clientY,
-      pageX: touch.pageX,
-      pageY: touch.pageY,
+      startX: touch.clientX,
+      startY: touch.clientY,
       file,
-      moved: false,
-      menuFired: false,
-      dragFired: false,
-      menuTimer: null,
-      dragTimer: null,
+      info,
+      rect,
+      pressed: false,
+      dragging: false,
+      timer: null,
     };
     touchDataRef.current = data;
 
-    data.menuTimer = setTimeout(() => {
-      if (touchDataRef.current !== data || data.moved) return;
-      data.menuFired = true;
-      suppressClickRef.current = true;
+    data.timer = setTimeout(() => {
+      if (touchDataRef.current !== data) return;
+      data.pressed = true;
       if (navigator.vibrate) navigator.vibrate(10);
-      setContextMenu({ visible: true, x: data.pageX, y: data.pageY, file });
-    }, TOUCH_MENU_DELAY_MS);
-
-    data.dragTimer = setTimeout(() => {
-      if (touchDataRef.current !== data || data.moved) return;
-      data.dragFired = true;
-      suppressClickRef.current = true;
-      // Holding past the menu threshold graduates into move mode instead.
-      setContextMenu({ visible: false, x: 0, y: 0, file: null });
-      if (navigator.vibrate) navigator.vibrate([12, 40, 12]);
-      setDraggedItem(file.path);
-      setTouchDragPath(file.path);
-    }, TOUCH_DRAG_DELAY_MS);
+      setTouchGesture({ path: file.path, mode: 'pressed' });
+    }, LONG_PRESS_MS);
   };
 
   const handleTouchMove = (e) => {
@@ -361,53 +383,99 @@ const performUpload = async (entries) => {
     const touch = e.touches[0];
     if (!touch) return;
 
-    if (data.dragFired) {
-      // Actively moving the item: stop the page from scrolling underneath
-      // the finger and highlight whatever drop target it's currently over.
-      if (e.cancelable) e.preventDefault();
-      const el = document.elementFromPoint(touch.clientX, touch.clientY);
-      const dropEl = el ? el.closest('[data-drop-path]') : null;
-      const target = dropEl ? dropEl.getAttribute('data-drop-path') : null;
-      setDragOverTarget(target !== null && target !== data.file.path ? target : null);
+    const dx = touch.clientX - data.startX;
+    const dy = touch.clientY - data.startY;
+
+    if (!data.pressed) {
+      // Still waiting to see if this is a hold; moving early means it's a scroll.
+      if (Math.abs(dx) > PRE_PRESS_CANCEL_PX || Math.abs(dy) > PRE_PRESS_CANCEL_PX) {
+        clearTimeout(data.timer);
+        touchDataRef.current = null;
+      }
       return;
     }
 
-    const dx = touch.clientX - data.x;
-    const dy = touch.clientY - data.y;
-    if (!data.moved && (Math.abs(dx) > TOUCH_MOVE_CANCEL_PX || Math.abs(dy) > TOUCH_MOVE_CANCEL_PX)) {
-      // Finger is scrolling/swiping, not holding still — cancel both timers.
-      data.moved = true;
-      clearTimeout(data.menuTimer);
-      clearTimeout(data.dragTimer);
+    if (!data.dragging) {
+      // Pressed and holding — decide based on whether the finger starts moving.
+      if (Math.abs(dx) > DRAG_START_PX || Math.abs(dy) > DRAG_START_PX) {
+        data.dragging = true;
+        suppressClickRef.current = true;
+        if (navigator.vibrate) navigator.vibrate([12, 30, 12]);
+        setDraggedItem(data.file.path);
+        setTouchGesture({ path: data.file.path, mode: 'dragging' });
+        setDragGhost({ x: touch.clientX, y: touch.clientY, icon: data.info.icon, name: data.file.name });
+      } else {
+        return; // holding roughly still, no decision yet
+      }
     }
+
+    // Actively dragging: stop the page scrolling underneath the finger,
+    // move the ghost preview, and highlight whatever drop target it's over.
+    if (e.cancelable) e.preventDefault();
+    setDragGhost(g => (g ? { ...g, x: touch.clientX, y: touch.clientY } : g));
+    const el = document.elementFromPoint(touch.clientX, touch.clientY);
+    const dropEl = el ? el.closest('[data-drop-path]') : null;
+    const target = dropEl ? dropEl.getAttribute('data-drop-path') : null;
+    setDragOverTarget(target !== null && target !== data.file.path ? target : null);
+    updateAutoScroll(touch.clientY);
   };
 
   const handleTouchEnd = (e) => {
     const data = touchDataRef.current;
     touchDataRef.current = null;
+    stopAutoScroll();
     if (!data) return;
+    clearTimeout(data.timer);
 
-    clearTimeout(data.menuTimer);
-    clearTimeout(data.dragTimer);
-
-    if (data.dragFired) {
+    if (data.dragging) {
       if (e.cancelable) e.preventDefault();
       const touch = e.changedTouches[0];
       const el = touch ? document.elementFromPoint(touch.clientX, touch.clientY) : null;
       const dropEl = el ? el.closest('[data-drop-path]') : null;
       const destinationDir = dropEl ? dropEl.getAttribute('data-drop-path') : null;
 
+      suppressClickRef.current = true;
       setDraggedItem(null);
       setDragOverTarget(null);
-      setTouchDragPath(null);
+      setTouchGesture(null);
+      setDragGhost(null);
 
       if (destinationDir !== null && destinationDir !== data.file.path) {
         performMove(data.file.path, destinationDir);
       }
+      return;
     }
-    // If only the menu fired (or neither fired, i.e. a quick tap), there's
-    // nothing else to do here — the menu stays open on its own, and a quick
-    // tap's trailing click event will open the file/folder normally.
+
+    if (data.pressed) {
+      // Held still, then released -> open the context menu anchored near the tile
+      // (not the raw fingertip, so the menu doesn't end up hidden under the thumb).
+      suppressClickRef.current = true;
+      setTouchGesture(null);
+
+      const estimatedMenuWidth = 180;
+      const estimatedMenuHeight = 210;
+      let menuX = data.rect.left + data.rect.width / 2 - estimatedMenuWidth / 2;
+      menuX = Math.min(Math.max(8, menuX), window.innerWidth - estimatedMenuWidth - 8);
+
+      let menuY = data.rect.bottom + 8;
+      if (menuY + estimatedMenuHeight > window.innerHeight) {
+        menuY = Math.max(8, data.rect.top - estimatedMenuHeight - 8);
+      }
+
+      setContextMenu({ visible: true, x: menuX, y: menuY, file: data.file });
+    }
+    // else: quick tap — do nothing extra, the trailing click event opens the item.
+  };
+
+  const handleTouchCancel = () => {
+    const data = touchDataRef.current;
+    touchDataRef.current = null;
+    stopAutoScroll();
+    if (data) clearTimeout(data.timer);
+    setDraggedItem(null);
+    setDragOverTarget(null);
+    setTouchGesture(null);
+    setDragGhost(null);
   };
 
   // --- API & UI Actions ---
@@ -624,7 +692,7 @@ const performUpload = async (entries) => {
               </div>
             )}
 
-      <div className="explorer-body">
+      <div className="explorer-body" ref={explorerBodyRef}>
         {error && <div className="error-message">{error}</div>}
 
         {loading ? ( <div className="loading-state">Loading...</div> ) : (
@@ -638,22 +706,23 @@ const performUpload = async (entries) => {
             {files.map((file, index) => {
               const info = file.isDirectory ? { icon: '📁' } : getFileInfo(file.name);
               const isDragOver = dragOverTarget === file.path;
-              const isTouchDragging = touchDragPath === file.path;
+              const isTouchPressed = touchGesture && touchGesture.path === file.path && touchGesture.mode === 'pressed';
+              const isTouchDragging = touchGesture && touchGesture.path === file.path && touchGesture.mode === 'dragging';
               
               return (
                 <div 
                   key={index} 
-                  className={`file-tile ${file.isDirectory ? 'is-folder' : ''} ${isDragOver ? 'drag-over' : ''} ${isTouchDragging ? 'touch-dragging' : ''}`}
+                  className={`file-tile ${file.isDirectory ? 'is-folder' : ''} ${isDragOver ? 'drag-over' : ''} ${isTouchPressed ? 'touch-pressed' : ''} ${isTouchDragging ? 'touch-dragging' : ''}`}
                   draggable={true}
                   data-drop-path={file.isDirectory ? file.path : undefined}
                   onDragStart={(e) => handleDragStart(e, file)}
                   onDragOver={file.isDirectory ? (e) => handleDragOver(e, file.path) : null}
                   onDragLeave={file.isDirectory ? handleDragLeave : null}
                   onDrop={file.isDirectory ? (e) => handleDrop(e, file.path) : null}
-                  onTouchStart={(e) => handleTouchStart(e, file)}
+                  onTouchStart={(e) => handleTouchStart(e, file, info)}
                   onTouchMove={handleTouchMove}
                   onTouchEnd={handleTouchEnd}
-                  onTouchCancel={handleTouchEnd}
+                  onTouchCancel={handleTouchCancel}
                   onClick={(e) => {
                     e.stopPropagation();
                     if (suppressClickRef.current) { suppressClickRef.current = false; return; }
@@ -729,6 +798,13 @@ const performUpload = async (entries) => {
               }}>Close Preview</button>
             </div>
           </div>
+        </div>
+      )}
+
+      {dragGhost && (
+        <div className="touch-drag-ghost" style={{ left: dragGhost.x, top: dragGhost.y }}>
+          <div className="icon">{dragGhost.icon}</div>
+          <div className="name">{dragGhost.name}</div>
         </div>
       )}
     </div>
