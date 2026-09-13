@@ -682,6 +682,83 @@ button:disabled {
   box-shadow: none;
 }
 
+/* ---------- Users modal (shared access) ---------- */
+
+.users-modal-content {
+  max-width: 420px;
+}
+
+.user-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 4px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.user-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  background-color: var(--surface-alt);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.user-row-name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.9rem;
+  color: var(--text-primary);
+}
+
+.user-badge {
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--accent);
+  background-color: var(--accent-soft);
+  padding: 2px 7px;
+  border-radius: 999px;
+}
+
+.remove-user-btn {
+  width: auto;
+  padding: 6px 10px;
+  font-size: 0.78rem;
+  background-color: transparent;
+  border: 1px solid var(--danger);
+  color: var(--danger);
+}
+
+.remove-user-btn:hover:not(:disabled) {
+  background-color: var(--danger-soft);
+  box-shadow: none;
+}
+
+.remove-user-btn:disabled {
+  border-color: var(--border);
+  color: var(--text-tertiary);
+  background-color: transparent;
+}
+
+.users-divider {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 18px 0 14px;
+}
+
+.users-modal-section-title {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-tertiary);
+  margin-bottom: 10px;
+}
+
 /* ---------- Context menu ---------- */
 
 .context-menu {

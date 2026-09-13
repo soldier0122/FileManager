@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import Editor from '@monaco-editor/react';
+import UsersModal from './UsersModal';
 
 const getFileInfo = (filename) => {
   const ext = filename.split('.').pop().toLowerCase();
@@ -36,6 +37,7 @@ export default function Dashboard({ onLogout }) {
   const [modal, setModal] = useState({ isOpen: false, type: '', input: '', error: '', targetPath: '' });
   const [clipboard, setClipboard] = useState(null);
   const [contextMenu, setContextMenu] = useState({ visible: false, x: 0, y: 0, file: null });
+  const [usersModalOpen, setUsersModalOpen] = useState(false);
 
   const [draggedItem, setDraggedItem] = useState(null);
   const [dragOverTarget, setDragOverTarget] = useState(null);
@@ -595,7 +597,10 @@ const performUpload = async (entries) => {
     <div className="dashboard-container">
       <div className="dashboard-header">
         <h2>File Explorer</h2>
-        <button onClick={onLogout} className="logout-btn">Log Out</button>
+        <div className="action-buttons">
+          <button onClick={() => setUsersModalOpen(true)} className="action-btn" style={{ backgroundColor: '#0056b3' }}>👥 Users</button>
+          <button onClick={onLogout} className="logout-btn">Log Out</button>
+        </div>
       </div>
       
       <div className="controls-bar">
@@ -806,6 +811,10 @@ const performUpload = async (entries) => {
           <div className="icon">{dragGhost.icon}</div>
           <div className="name">{dragGhost.name}</div>
         </div>
+      )}
+
+      {usersModalOpen && (
+        <UsersModal onClose={() => setUsersModalOpen(false)} onLogout={onLogout} />
       )}
     </div>
   );

@@ -25,6 +25,7 @@ export default function LoginForm({ onLogin }) {
       }
 
       localStorage.setItem('vps_token', data.token);
+      localStorage.setItem('vps_username', data.username);
       onLogin();
     } catch (err) {
       setError(err.message);
