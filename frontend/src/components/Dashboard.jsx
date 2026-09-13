@@ -355,6 +355,17 @@ const performUpload = async (entries) => {
   const handleTouchStart = (e, file, info) => {
     if (e.touches.length !== 1) return; // ignore multi-touch (pinch/scroll gestures)
 
+    // Tiles are `draggable` so mouse users get native HTML5 drag-and-drop.
+    // On touchscreens that same attribute makes some browsers (notably
+    // Chrome/Android) convert the touch gesture straight into a native
+    // drag the instant you press down, racing ahead of the long-press
+    // logic below and making it look like the item starts moving
+    // immediately. Turn native dragging off for the duration of this
+    // touch so only our custom press/hold/drag logic runs; it's restored
+    // in handleTouchEnd/handleTouchCancel so desktop mouse drag is
+    // unaffected.
+    e.currentTarget.draggable = false;
+
     const touch = e.touches[0];
     suppressClickRef.current = false;
     const rect = e.currentTarget.getBoundingClientRect();
@@ -422,7 +433,24 @@ const performUpload = async (entries) => {
     updateAutoScroll(touch.clientY);
   };
 
+  // React (17+) registers touchmove as a passive listener by default, which
+  // means the e.preventDefault() call above (in a JSX onTouchMove prop)
+  // would be silently ignored — the page would keep scrolling underneath an
+  // in-progress drag. To actually be able to block scrolling once a drag
+  // starts, bind a real non-passive touchmove listener ourselves instead of
+  // relying on the JSX prop. handleTouchMoveRef always points at the latest
+  // render's handler (it only reads refs/setters, so there's nothing stale
+  // to worry about), letting this effect run once on mount.
+  const handleTouchMoveRef = useRef(null);
+  handleTouchMoveRef.current = handleTouchMove;
+  useEffect(() => {
+    const listener = (e) => handleTouchMoveRef.current(e);
+    document.addEventListener('touchmove', listener, { passive: false });
+    return () => document.removeEventListener('touchmove', listener);
+  }, []);
+
   const handleTouchEnd = (e) => {
+    if (e.currentTarget) e.currentTarget.draggable = true; // re-enable for mouse users
     const data = touchDataRef.current;
     touchDataRef.current = null;
     stopAutoScroll();
@@ -469,7 +497,8 @@ const performUpload = async (entries) => {
     // else: quick tap — do nothing extra, the trailing click event opens the item.
   };
 
-  const handleTouchCancel = () => {
+  const handleTouchCancel = (e) => {
+    if (e && e.currentTarget) e.currentTarget.draggable = true; // re-enable for mouse users
     const data = touchDataRef.current;
     touchDataRef.current = null;
     stopAutoScroll();
@@ -725,7 +754,6 @@ const performUpload = async (entries) => {
                   onDragLeave={file.isDirectory ? handleDragLeave : null}
                   onDrop={file.isDirectory ? (e) => handleDrop(e, file.path) : null}
                   onTouchStart={(e) => handleTouchStart(e, file, info)}
-                  onTouchMove={handleTouchMove}
                   onTouchEnd={handleTouchEnd}
                   onTouchCancel={handleTouchCancel}
                   onClick={(e) => {
