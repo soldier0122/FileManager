@@ -2,7 +2,9 @@ const express = require('express');
 const multer = require('multer');
 const { ZipArchive } = require('archiver');
 const fs = require('fs/promises');
+const fsSync = require('fs');
 const path = require('path');
+const { execSync } = require('child_process');
 const authenticateToken = require('../middleware/auth');
 
 const router = express.Router();
@@ -19,6 +21,56 @@ const getSafePath = (userPath) => {
         throw new Error('Access denied: Path out of bounds');
     }
     return targetPath;
+};
+
+const getDiskStats = async (targetPath) => {
+    const driveRoot = path.parse(path.resolve(targetPath)).root;
+    let totalBytes = 0;
+    let freeBytes = 0;
+
+    if (typeof fsSync.statfsSync === 'function') {
+        try {
+            const stats = fsSync.statfsSync(targetPath);
+            totalBytes = Number(stats.blocks || 0) * Number(stats.bsize || 0);
+            freeBytes = Number(stats.bavail || 0) * Number(stats.bsize || 0);
+        } catch (error) {
+            // Fall through to the OS-specific fallback below.
+        }
+    }
+
+    if ((!totalBytes || !freeBytes) && process.platform === 'win32') {
+        try {
+            const driveLetter = driveRoot.replace(/[\\/]+/g, '').slice(0, 1);
+            const output = execSync(
+                `wmic logicaldisk where "DeviceID='${driveLetter}:\\'" get FreeSpace,Size /value`,
+                { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }
+            );
+            const match = output.match(/FreeSpace=(\d+)/i);
+            const sizeMatch = output.match(/Size=(\d+)/i);
+
+            if (match && sizeMatch) {
+                freeBytes = Number(match[1]);
+                totalBytes = Number(sizeMatch[1]);
+            }
+        } catch (error) {
+            totalBytes = 0;
+            freeBytes = 0;
+        }
+    }
+
+    if (!totalBytes && !freeBytes) {
+        totalBytes = 1;
+        freeBytes = 0;
+    }
+
+    const usedBytes = Math.max(0, totalBytes - freeBytes);
+
+    return {
+        total: totalBytes,
+        used: usedBytes,
+        free: Math.max(0, freeBytes),
+        percentUsed: totalBytes ? Math.min(100, Math.max(0, (usedBytes / totalBytes) * 100)) : 0
+    };
 };
 
 // GET /api/files?path=...
@@ -182,6 +234,23 @@ router.get('/download', authenticateToken, (req, res) => {
     } catch (error) {
         console.error('Download error:', error);
         res.status(500).json({ error: 'Failed to download file' });
+    }
+});
+
+router.get('/storage', authenticateToken, async (req, res) => {
+    try {
+        const diskStats = await getDiskStats(STORAGE_ROOT);
+        const usedBytes = Math.max(0, diskStats.total - diskStats.free);
+
+        res.json({
+            total: diskStats.total,
+            used: usedBytes,
+            free: Math.max(0, diskStats.free),
+            percentUsed: diskStats.total ? Math.min(100, Math.max(0, (usedBytes / diskStats.total) * 100)) : 0
+        });
+    } catch (error) {
+        console.error('Storage stats error:', error);
+        res.status(500).json({ error: 'Failed to get storage usage' });
     }
 });
 

@@ -373,6 +373,64 @@ button:disabled {
   box-shadow: 0 4px 14px var(--accent-soft-strong);
 }
 
+.storage-panel {
+  background-color: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 14px 16px 12px;
+  margin-bottom: 18px;
+}
+
+.storage-header,
+.storage-meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+
+.storage-header {
+  margin-bottom: 10px;
+}
+
+.storage-label,
+.storage-summary,
+.storage-meta {
+  font-size: 0.78rem;
+}
+
+.storage-label {
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.storage-summary {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.storage-bar-track {
+  width: 100%;
+  height: 10px;
+  background-color: var(--surface-alt);
+  border-radius: 999px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+}
+
+.storage-bar-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--accent) 0%, var(--accent-strong) 100%);
+  border-radius: inherit;
+  transition: width 0.25s ease;
+}
+
+.storage-meta {
+  margin-top: 10px;
+  color: var(--text-secondary);
+}
+
 .breadcrumbs {
   font-family: var(--font-mono);
   color: var(--accent);

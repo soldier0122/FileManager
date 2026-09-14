@@ -31,6 +31,8 @@ export default function Dashboard({ onLogout }) {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
   const [isUploading, setIsUploading] = useState(false);
+  const [storageStats, setStorageStats] = useState({ total: 0, used: 0, free: 0, percentUsed: 0 });
+  const [storageBarVisible, setStorageBarVisible] = useState(() => localStorage.getItem('fm_storage_bar_visible') !== 'false');
 
   const [editorState, setEditorState] = useState({ isOpen: false, filePath: '', content: '', isSaving: false });
   const [mediaViewer, setMediaViewer] = useState({ isOpen: false, url: '', filename: '', type: '', isBlob: false });
@@ -70,6 +72,14 @@ export default function Dashboard({ onLogout }) {
   }, [currentPath]);
 
   useEffect(() => {
+    fetchStorageStats();
+  }, []);
+
+  useEffect(() => {
+    localStorage.setItem('fm_storage_bar_visible', String(storageBarVisible));
+  }, [storageBarVisible]);
+
+  useEffect(() => {
     const handleClick = () => setContextMenu({ visible: false, x: 0, y: 0, file: null });
     document.addEventListener('click', handleClick);
     return () => document.removeEventListener('click', handleClick);
@@ -82,6 +92,32 @@ export default function Dashboard({ onLogout }) {
       if (autoScrollRAFRef.current) cancelAnimationFrame(autoScrollRAFRef.current);
     };
   }, []);
+
+  const formatBytes = (bytes) => {
+    if (!Number.isFinite(bytes) || bytes <= 0) return '0 B';
+    const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+    const unitIndex = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
+    const value = bytes / (1024 ** unitIndex);
+    return `${value >= 10 || unitIndex === 0 ? value.toFixed(0) : value.toFixed(1)} ${units[unitIndex]}`;
+  };
+
+  const fetchStorageStats = async () => {
+    try {
+      const token = localStorage.getItem('vps_token');
+      const response = await fetch('/api/files/storage', { headers: { 'Authorization': `Bearer ${token}` } });
+      if (response.status === 401 || response.status === 403) return onLogout();
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || 'Failed to fetch storage');
+      setStorageStats({
+        total: Number(data.total) || 0,
+        used: Number(data.used) || 0,
+        free: Number(data.free) || 0,
+        percentUsed: Number(data.percentUsed) || 0
+      });
+    } catch (err) {
+      setStorageStats({ total: 0, used: 0, free: 0, percentUsed: 0 });
+    }
+  };
 
   const fetchFiles = async (path) => {
     setLoading(true);
@@ -97,6 +133,7 @@ export default function Dashboard({ onLogout }) {
       }
       if (!response.ok) throw new Error(data.error || 'Failed to fetch files');
       setFiles(data.files || []);
+      await fetchStorageStats();
     } catch (err) { setError(err.message); } finally { setLoading(false); }
   };
 
@@ -627,7 +664,6 @@ const performUpload = async (entries) => {
       <div className="dashboard-header">
         <h2>File Explorer</h2>
         <div className="action-buttons">
-          <button onClick={() => setUsersModalOpen(true)} className="action-btn" style={{ backgroundColor: '#0056b3' }}>👥 Users</button>
           <button onClick={onLogout} className="logout-btn">Log Out</button>
         </div>
       </div>
@@ -677,8 +713,12 @@ const performUpload = async (entries) => {
           })}
         </div>
         <div className="action-buttons">
+          <button className="action-btn btn-secondary" onClick={() => setStorageBarVisible((visible) => !visible)}>
+            {storageBarVisible ? 'Hide Storage' : 'Show Storage'}
+          </button>
+
           {clipboard && <button className="action-btn" style={{ backgroundColor: '#2e7d32' }} onClick={handlePaste}>📋 Paste Here</button>}
-          
+
           {/* Hidden File Input & Upload Button */}
           <input 
             type="file" 
@@ -687,7 +727,7 @@ const performUpload = async (entries) => {
             style={{ display: 'none' }} 
             onChange={(e) => uploadFiles(e.target.files)} 
           />
-          <button className="action-btn" style={{ backgroundColor: '#0056b3' }} onClick={() => fileInputRef.current.click()} disabled={isUploading}>
+          <button className="action-btn btn-secondary" onClick={() => fileInputRef.current.click()} disabled={isUploading}>
             {isUploading ? 'Uploading...' : '⬆️ Upload'}
           </button>
 
@@ -705,10 +745,11 @@ const performUpload = async (entries) => {
             style={{ display: 'none' }} 
             onChange={(e) => uploadFiles(e.target.files)} 
           />
-          <button className="action-btn" style={{ backgroundColor: '#0056b3' }} onClick={() => folderInputRef.current.click()} disabled={isUploading}>
+          <button className="action-btn btn-secondary" onClick={() => folderInputRef.current.click()} disabled={isUploading}>
             {isUploading ? 'Uploading...' : '📁 Upload Folder'}
           </button>
-          
+
+          <button className="action-btn btn-secondary" onClick={() => setUsersModalOpen(true)}>👥 Users</button>
           <button className="action-btn" onClick={() => setModal({ isOpen: true, type: 'folder', input: '' })}>+ Folder</button>
           <button className="action-btn" onClick={() => setModal({ isOpen: true, type: 'text', input: '' })}>+ File</button>
         </div>
@@ -725,6 +766,22 @@ const performUpload = async (entries) => {
                 </div>
               </div>
             )}
+
+      {storageBarVisible && (
+        <div className="storage-panel">
+          <div className="storage-header">
+            <span className="storage-label">Storage</span>
+            <span className="storage-summary">{storageStats.total ? `${Math.round(storageStats.percentUsed)}% used` : 'Loading...'}</span>
+          </div>
+          <div className="storage-bar-track">
+            <div className="storage-bar-fill" style={{ width: `${Math.min(Math.max(storageStats.percentUsed || 0, 0), 100)}%` }} />
+          </div>
+          <div className="storage-meta">
+            <span>{storageStats.used ? `${formatBytes(storageStats.used)} used` : '0 B used'}</span>
+            <span>{storageStats.free ? `${formatBytes(storageStats.free)} left` : '0 B left'}</span>
+          </div>
+        </div>
+      )}
 
       <div className="explorer-body" ref={explorerBodyRef}>
         {error && <div className="error-message">{error}</div>}
