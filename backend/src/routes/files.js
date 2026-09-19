@@ -6,22 +6,17 @@ const fsSync = require('fs');
 const path = require('path');
 const { execSync } = require('child_process');
 const authenticateToken = require('../middleware/auth');
+const { STORAGE_ROOT, getSafePath, toRelative } = require('../storage');
+const shares = require('../shares');
 
 const router = express.Router();
 
-const STORAGE_ROOT = process.env.STORAGE_ROOT 
-    ? path.resolve(process.env.STORAGE_ROOT) 
-    : path.resolve(__dirname, '../../storage');
-
 const upload = multer({ dest: path.join(STORAGE_ROOT, '.tmp') });
 
-const getSafePath = (userPath) => {
-    const targetPath = path.resolve(STORAGE_ROOT, userPath || '');
-    if (!targetPath.startsWith(STORAGE_ROOT)) {
-        throw new Error('Access denied: Path out of bounds');
-    }
-    return targetPath;
-};
+// Keeps share links in step with the filesystem after a delete/rename/move.
+// The file operation has already succeeded by the time this runs, so a
+// failure here is logged rather than reported as a failed request.
+const syncShares = (task) => task().catch((err) => console.error('Share sync error:', err));
 
 const getDiskStats = async (targetPath) => {
     const driveRoot = path.parse(path.resolve(targetPath)).root;
@@ -173,6 +168,7 @@ router.delete('/delete', authenticateToken, async (req, res) => {
         
         // fs.rm with recursive handles both files and non-empty folders
         await fs.rm(targetPath, { recursive: true, force: true });
+        await syncShares(() => shares.removeUnder(toRelative(targetPath)));
         res.json({ message: 'Deleted successfully' });
     } catch (error) {
         console.error('Delete error:', error);
@@ -194,6 +190,7 @@ router.put('/rename', authenticateToken, async (req, res) => {
         if (!newTargetPath.startsWith(STORAGE_ROOT)) throw new Error('Out of bounds');
 
         await fs.rename(targetPath, newTargetPath);
+        await syncShares(() => shares.moveUnder(toRelative(targetPath), toRelative(newTargetPath)));
         res.json({ message: 'Renamed successfully' });
     } catch (error) {
         console.error('Rename error:', error);
@@ -309,6 +306,7 @@ router.put('/move', authenticateToken, async (req, res) => {
         if (!dest.startsWith(STORAGE_ROOT)) throw new Error('Out of bounds');
 
         await fs.rename(src, dest);
+        await syncShares(() => shares.moveUnder(toRelative(src), toRelative(dest)));
         res.json({ message: 'Moved successfully' });
     } catch (error) {
         console.error('Move error:', error);

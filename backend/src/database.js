@@ -18,6 +18,20 @@ const db = new sqlite3.Database(dbPath, (err) => {
                 console.error('Error creating table', err.message);
             }
         });
+
+        // Public share links. One row per shared file/folder; file_path is
+        // relative to STORAGE_ROOT and is kept in sync on rename/move/delete.
+        db.run(`CREATE TABLE IF NOT EXISTS shares (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            token TEXT NOT NULL UNIQUE,
+            file_path TEXT NOT NULL UNIQUE,
+            created_by INTEGER,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )`, (err) => {
+            if (err) {
+                console.error('Error creating shares table', err.message);
+            }
+        });
     }
 });
 

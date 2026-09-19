@@ -1,17 +1,8 @@
 import { useState, useEffect, useRef } from 'react';
 import Editor from '@monaco-editor/react';
 import UsersModal from './UsersModal';
-
-const getFileInfo = (filename) => {
-  const ext = filename.split('.').pop().toLowerCase();
-  if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg'].includes(ext)) return { type: 'image', icon: '🖼️' };
-  if (['mp4', 'webm', 'mkv', 'avi'].includes(ext)) return { type: 'video', icon: '🎬' };
-  if (['mp3', 'wav', 'ogg'].includes(ext)) return { type: 'audio', icon: '🎵' };
-  if (['zip', 'rar', 'tar', 'gz', '7z'].includes(ext)) return { type: 'archive', icon: '📦' };
-  if (['pdf'].includes(ext)) return { type: 'pdf', icon: '📕' };
-  if (['js', 'jsx', 'ts', 'tsx', 'py', 'json', 'html', 'css', 'lua'].includes(ext)) return { type: 'code', icon: '📝' };
-  return { type: 'text', icon: '📄' };
-};
+import ShareModal from './ShareModal';
+import { getFileInfo, formatBytes } from '../utils/fileInfo';
 
 // --- Touch long-press tuning (single-threshold pattern) ---
 // One timer decides everything: hold a tile for LONG_PRESS_MS and it "lifts"
@@ -40,6 +31,7 @@ export default function Dashboard({ onLogout }) {
   const [clipboard, setClipboard] = useState(null);
   const [contextMenu, setContextMenu] = useState({ visible: false, x: 0, y: 0, file: null });
   const [usersModalOpen, setUsersModalOpen] = useState(false);
+  const [shareTarget, setShareTarget] = useState(null); // the file/folder whose share link is being shown
 
   const [draggedItem, setDraggedItem] = useState(null);
   const [dragOverTarget, setDragOverTarget] = useState(null);
@@ -92,14 +84,6 @@ export default function Dashboard({ onLogout }) {
       if (autoScrollRAFRef.current) cancelAnimationFrame(autoScrollRAFRef.current);
     };
   }, []);
-
-  const formatBytes = (bytes) => {
-    if (!Number.isFinite(bytes) || bytes <= 0) return '0 B';
-    const units = ['B', 'KB', 'MB', 'GB', 'TB'];
-    const unitIndex = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
-    const value = bytes / (1024 ** unitIndex);
-    return `${value >= 10 || unitIndex === 0 ? value.toFixed(0) : value.toFixed(1)} ${units[unitIndex]}`;
-  };
 
   const fetchStorageStats = async () => {
     try {
@@ -520,7 +504,7 @@ const performUpload = async (entries) => {
       setTouchGesture(null);
 
       const estimatedMenuWidth = 180;
-      const estimatedMenuHeight = 210;
+      const estimatedMenuHeight = 250;
       let menuX = data.rect.left + data.rect.width / 2 - estimatedMenuWidth / 2;
       menuX = Math.min(Math.max(8, menuX), window.innerWidth - estimatedMenuWidth - 8);
 
@@ -597,6 +581,10 @@ const performUpload = async (entries) => {
       const url = `/api/files/export?path=${encodeURIComponent(file.path)}&token=${token}`;
       const a = document.createElement('a'); a.style.display = 'none'; a.href = url;
       document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    }
+    else if (action === 'share') {
+      setContextMenu({ visible: false, x: 0, y: 0, file: null });
+      setShareTarget(file);
     }
     else if (action === 'rename') setModal({ isOpen: true, type: 'rename', input: file.name, error: '', targetPath: file.path });
     else if (action === 'copy') setClipboard(file.path);
@@ -848,6 +836,7 @@ const performUpload = async (entries) => {
         <div className="context-menu" style={{ top: contextMenu.y, left: contextMenu.x }} onClick={(e) => e.stopPropagation()}>
           <div className="context-menu-item" onClick={() => handleAction('open', contextMenu.file)}>{contextMenu.file.isDirectory ? '📂 Open Folder' : '👀 Open / View'}</div>
           <div className="context-menu-item" onClick={() => handleAction('download', contextMenu.file)}>⬇️ Download</div>
+          <div className="context-menu-item" onClick={() => handleAction('share', contextMenu.file)}>🔗 Share</div>
           <div className="context-menu-item" onClick={() => handleAction('rename', contextMenu.file)}>🏷️ Rename</div>
           <div className="context-menu-item" onClick={() => handleAction('copy', contextMenu.file)}>📄 Copy</div>
           <div className="context-menu-item danger" onClick={() => handleAction('delete', contextMenu.file)}>🗑️ Delete</div>
@@ -900,6 +889,10 @@ const performUpload = async (entries) => {
 
       {usersModalOpen && (
         <UsersModal onClose={() => setUsersModalOpen(false)} onLogout={onLogout} />
+      )}
+
+      {shareTarget && (
+        <ShareModal file={shareTarget} onClose={() => setShareTarget(null)} onLogout={onLogout} />
       )}
     </div>
   );

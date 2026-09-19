@@ -1018,6 +1018,110 @@ button:disabled {
   color: var(--accent-contrast);
 }
 
+/* ---------- Sharing ---------- */
+
+/* Share modal (opened from the context menu) */
+
+.share-modal-content {
+  max-width: 580px; /* wide enough to show the whole link */
+}
+
+.share-modal-content h3 {
+  word-break: break-word;
+}
+
+.share-link-row {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+}
+
+.share-link-row input {
+  flex: 1;
+  min-width: 0;
+  margin-bottom: 0;
+  padding: 9px 12px;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+}
+
+.share-link-row .action-btn {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+/* Destructive action sits on the left, away from Close. */
+.share-stop-btn {
+  margin-right: auto;
+  background-color: transparent;
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.share-stop-btn:hover:not(:disabled) {
+  background-color: var(--danger-soft);
+  border-color: var(--danger);
+  color: var(--danger);
+  box-shadow: none;
+}
+
+/* Public page a share link opens (/s/<token>) */
+
+.share-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  /* Explicit width: the page root shrink-wraps its content, so without this
+     the card collapses to the width of the filename. */
+  width: 400px;
+  max-width: calc(100vw - 48px);
+}
+
+.share-icon {
+  font-size: 4.5rem;
+  line-height: 1;
+  margin-bottom: 18px;
+  filter: drop-shadow(0 6px 14px var(--accent-soft-strong));
+}
+
+.share-name {
+  max-width: 100%;
+  margin: 0 0 6px;
+  font-size: 1.15rem;
+  word-break: break-word;
+}
+
+.share-meta {
+  margin: 0 0 26px;
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  color: var(--text-tertiary);
+}
+
+/* An <a> rather than a <button> so the browser streams the download itself. */
+.share-download-btn {
+  display: block;
+  width: 100%;
+  padding: 12px 16px;
+  background-color: var(--accent);
+  color: var(--accent-contrast);
+  border-radius: var(--radius-sm);
+  font-size: 1rem;
+  font-weight: 600;
+  text-align: center;
+  text-decoration: none;
+  transition: background-color 0.2s var(--ease), transform 0.15s var(--ease), box-shadow 0.2s var(--ease);
+}
+
+.share-download-btn:hover {
+  background-color: var(--accent-strong);
+  box-shadow: 0 4px 14px var(--accent-soft-strong);
+}
+
+.share-download-btn:active {
+  transform: translateY(1px);
+}
+
 /* ---------- Small screens ---------- */
 
 @media (max-width: 480px) {

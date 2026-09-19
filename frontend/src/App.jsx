@@ -3,9 +3,10 @@ import RegisterForm from './components/RegisterForm';
 import LoginForm from './components/LoginForm';
 import Dashboard from './components/Dashboard';
 import SettingsMenu from './components/SettingsMenu';
+import SharePage from './components/SharePage';
 import './App.css'; 
 
-function App() {
+function MainApp() {
   const [appState, setAppState] = useState('loading'); 
   
   useEffect(() => {
@@ -100,6 +101,28 @@ function App() {
       </div>
     </>
   );
+}
+
+// Public share links look like /s/<token>. Those visitors aren't logged in and
+// shouldn't hit the setup/login flow at all, so they get their own page.
+function getShareToken() {
+  const match = window.location.pathname.match(/^\/s\/([A-Za-z0-9_-]+)\/?$/);
+  return match ? match[1] : null;
+}
+
+function App() {
+  const shareToken = getShareToken();
+
+  if (shareToken) {
+    return (
+      <>
+        <SettingsMenu />
+        <SharePage token={shareToken} />
+      </>
+    );
+  }
+
+  return <MainApp />;
 }
 
 export default App;

@@ -14,6 +14,7 @@ A self-hosted, web-based file manager. Run it on a VPS or home server and get a 
 - 👀 **Preview** — view images and text/code files without downloading them
 - 📦 **Export as ZIP** — download a whole folder as a `.zip`, or download single files directly
 - 🗂️ **Standard file ops** — create folders and text files, rename, copy, move, and delete
+- 🔗 **Share links** — right-click → *Share* creates a public link (`/s/<token>`) that opens a simple download page, no login needed. Works for files and folders (folders download as `.zip`); switch it off again with *Stop sharing*
 - 🖥️ **Right-click context menu** for quick actions on any item
 
   ## Screenshots
@@ -43,12 +44,15 @@ file-manager/
 ├── backend/
 │   ├── src/
 │   │   ├── server.js          # Express app entrypoint
-│   │   ├── database.js        # SQLite connection + schema
+│   │   ├── database.js        # SQLite connection + schema (users, shares)
+│   │   ├── storage.js         # STORAGE_ROOT + path sandboxing, shared by routes
+│   │   ├── shares.js          # Share-link persistence (create / revoke / follow renames)
 │   │   ├── middleware/
 │   │   │   └── auth.js        # JWT verification middleware
 │   │   └── routes/
 │   │       ├── auth.js        # /api/auth (setup-status, register, login)
-│   │       └── files.js       # /api/files (browse, CRUD, upload, download, export)
+│   │       ├── files.js       # /api/files (browse, CRUD, upload, download, export)
+│   │       └── share.js       # /api/share (create/revoke links, public download)
 │   ├── storage/                # Files you upload live here (gitignored)
 │   └── .env.example
 └── frontend/
@@ -56,7 +60,9 @@ file-manager/
     │   ├── components/
     │   │   ├── Dashboard.jsx   # Main file browser UI
     │   │   ├── LoginForm.jsx
-    │   │   └── RegisterForm.jsx
+    │   │   ├── RegisterForm.jsx
+    │   │   ├── ShareModal.jsx  # "Share" dialog: copy link / stop sharing
+    │   │   └── SharePage.jsx   # Public page a share link opens (/s/<token>)
     │   └── App.jsx             # Routes between setup / login / dashboard
     └── vite.config.js          # Dev server proxy to the backend
 ```
@@ -94,6 +100,12 @@ Optionally set `STORAGE_ROOT` to point uploaded files somewhere other than the d
 STORAGE_ROOT=/path/to/your/files
 ```
 
+Set `PUBLIC_URL` to the address people will reach the app at. It's the base of the share links the app generates (defaults to `https://dominikkrawczyk.duckdns.org`):
+
+```
+PUBLIC_URL=https://dominikkrawczyk.duckdns.org
+```
+
 Start the backend:
 
 ```bash
@@ -127,6 +139,22 @@ npm run build
 
 This outputs static assets to `frontend/dist/`. Serve them with any static file host (or add static serving to the Express backend) and point it at the running backend API.
 
+Share links (`/s/<token>`) are handled by the frontend, so your web server must fall back to `index.html` for unknown paths, in addition to proxying `/api` to the backend. For example:
+
+```nginx
+location /      { root /path/to/frontend/dist; try_files $uri /index.html; }
+location /api/  { proxy_pass http://localhost:3000; }
+```
+
+or with Caddy:
+
+```
+handle /api/* { reverse_proxy localhost:3000 }
+handle        { root * /path/to/frontend/dist
+                try_files {path} /index.html
+                file_server }
+```
+
 ## API Overview
 
 All `/api/files/*` routes (except where noted) require a `Bearer <token>` header obtained from `/api/auth/login`. Paths are always relative to `STORAGE_ROOT` and are sandboxed — the backend rejects any path that resolves outside of it.
@@ -148,6 +176,10 @@ All `/api/files/*` routes (except where noted) require a `Bearer <token>` header
 | GET | `/api/files/download?path=` | Stream a file's raw contents |
 | GET | `/api/files/export?path=` | Download a file, or a folder as a `.zip` |
 | POST | `/api/files/upload` | Upload one or more files (`multipart/form-data`) |
+| POST | `/api/share` | Create (or fetch) a public share link for a file/folder → `{ token, url }` |
+| DELETE | `/api/share` | Stop sharing a file/folder |
+| GET | `/api/share/:token` | **Public.** Name, type and size of the shared item |
+| GET | `/api/share/:token/download` | **Public.** Download the shared file (or folder as `.zip`) |
 
 ## Security Notes
 
@@ -155,6 +187,7 @@ This project is meant for personal or small-scale self-hosting. If you deploy it
 
 - Always set a long, random `JWT_SECRET` — the server refuses to start without one.
 - Serve the app over HTTPS in production so credentials and tokens aren't sent in plaintext.
+- Anyone who has a share link can download that item without logging in. Links are 128-bit random tokens (not guessable), but treat them like a password: use *Stop sharing* when you're done. Deleting a shared item also removes its link; renaming or moving it keeps the link working.
 - The `storage/` directory can grow to contain sensitive files — make sure it's excluded from backups you don't control and isn't publicly web-accessible outside the app itself.
 
 ## License
