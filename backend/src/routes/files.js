@@ -4,6 +4,7 @@ const { ZipArchive } = require('archiver');
 const fs = require('fs/promises');
 const fsSync = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const { execSync } = require('child_process');
 const authenticateToken = require('../middleware/auth');
 const { STORAGE_ROOT, getSafePath, toRelative } = require('../storage');
@@ -123,6 +124,45 @@ router.post('/text', authenticateToken, async (req, res) => {
         res.status(201).json({ message: 'File created' });
     } catch (error) {
         res.status(500).json({ error: 'Failed to create file' });
+    }
+});
+
+// POST /api/files/notebook
+// Creates an empty, valid Jupyter notebook (nbformat 4.5) with one blank code cell.
+router.post('/notebook', authenticateToken, async (req, res) => {
+    try {
+        const { currentPath, fileName } = req.body;
+        if (!fileName || !String(fileName).trim()) return res.status(400).json({ error: 'File name required' });
+
+        const trimmed = String(fileName).trim();
+        const safeFileName = trimmed.toLowerCase().endsWith('.ipynb') ? trimmed : `${trimmed}.ipynb`;
+        const relPath = path.join(currentPath || '', safeFileName);
+        const newFilePath = getSafePath(relPath);
+
+        const notebook = {
+            cells: [{
+                cell_type: 'code',
+                execution_count: null,
+                id: crypto.randomUUID().replace(/-/g, '').slice(0, 8),
+                metadata: {},
+                outputs: [],
+                source: []
+            }],
+            metadata: {
+                kernelspec: { display_name: 'Python 3', language: 'python', name: 'python3' },
+                language_info: { name: 'python' }
+            },
+            nbformat: 4,
+            nbformat_minor: 5
+        };
+
+        // 'wx' fails instead of overwriting if the file already exists.
+        await fs.writeFile(newFilePath, JSON.stringify(notebook, null, 1) + '\n', { encoding: 'utf8', flag: 'wx' });
+        res.status(201).json({ message: 'Notebook created', path: relPath.replace(/\\/g, '/') });
+    } catch (error) {
+        if (error.code === 'EEXIST') return res.status(409).json({ error: 'A file with that name already exists' });
+        console.error('Create notebook error:', error);
+        res.status(500).json({ error: 'Failed to create notebook' });
     }
 });
 

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useTheme } from '../context/ThemeContext';
+import { useSettingsActions } from '../context/SettingsActionsContext';
 
 const OPTIONS = [
   { value: 'light', label: 'Light', icon: '☀️' },
@@ -9,6 +10,7 @@ const OPTIONS = [
 
 export default function SettingsMenu() {
   const { mode, setMode } = useTheme();
+  const actions = useSettingsActions();
   const [open, setOpen] = useState(false);
   const ref = useRef(null);
 
@@ -59,6 +61,25 @@ export default function SettingsMenu() {
               </button>
             ))}
           </div>
+
+          {actions.length > 0 && (
+            <>
+              <div className="settings-panel-title settings-panel-section">Manage</div>
+              <div className="settings-actions">
+                {actions.map((a) => (
+                  <button
+                    key={a.id}
+                    type="button"
+                    role="menuitem"
+                    className="settings-action"
+                    onClick={() => { setOpen(false); a.onClick(); }}
+                  >
+                    <span aria-hidden="true">{a.icon}</span> {a.label}
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
         </div>
       )}
     </div>

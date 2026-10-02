@@ -2,6 +2,9 @@ import { useState, useEffect, useRef } from 'react';
 import Editor from '@monaco-editor/react';
 import UsersModal from './UsersModal';
 import ShareModal from './ShareModal';
+import NotebookViewer from './NotebookViewer';
+import DropdownButton from './DropdownButton';
+import { useRegisterSettingsActions } from '../context/SettingsActionsContext';
 import { getFileInfo, formatBytes } from '../utils/fileInfo';
 
 // --- Touch long-press tuning (single-threshold pattern) ---
@@ -70,6 +73,12 @@ export default function Dashboard({ onLogout }) {
   useEffect(() => {
     localStorage.setItem('fm_storage_bar_visible', String(storageBarVisible));
   }, [storageBarVisible]);
+
+  // Storage toggle and Users live in the global settings menu.
+  useRegisterSettingsActions([
+    { id: 'storage', icon: '💾', label: storageBarVisible ? 'Hide storage' : 'Show storage', onClick: () => setStorageBarVisible((v) => !v) },
+    { id: 'users', icon: '👥', label: 'Users', onClick: () => setUsersModalOpen(true) },
+  ], [storageBarVisible]);
 
   useEffect(() => {
     const handleClick = () => setContextMenu({ visible: false, x: 0, y: 0, file: null });
@@ -542,15 +551,21 @@ const performUpload = async (entries) => {
 
       if (modal.type === 'rename') {
         endpoint = '/api/files/rename'; method = 'PUT'; body = { oldPath: modal.targetPath, newName: modal.input };
+      } else if (modal.type === 'folder') {
+        endpoint = '/api/files/folder'; body = { currentPath, folderName: modal.input };
+      } else if (modal.type === 'notebook') {
+        endpoint = '/api/files/notebook'; body = { currentPath, fileName: modal.input };
       } else {
-        endpoint = modal.type === 'folder' ? '/api/files/folder' : '/api/files/text';
-        body = modal.type === 'folder' ? { currentPath, folderName: modal.input } : { currentPath, fileName: modal.input };
+        endpoint = '/api/files/text'; body = { currentPath, fileName: modal.input };
       }
 
       const res = await fetch(endpoint, { method, headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` }, body: JSON.stringify(body) });
-      if (!res.ok) throw new Error((await res.json()).error || `Failed operation`);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || `Failed operation`);
       setModal({ isOpen: false, type: '', input: '', error: '', targetPath: '' });
       fetchFiles(currentPath);
+      // A freshly created notebook opens straight away.
+      if (modal.type === 'notebook' && data.path) openFile(data.path, true);
     } catch (err) { setModal(prev => ({ ...prev, error: err.message })); }
   };
 
@@ -573,6 +588,8 @@ const performUpload = async (entries) => {
       } else if (fileInfo.type === 'video' || fileInfo.type === 'audio') {
         const url = `/api/files/download?path=${encodeURIComponent(file.path)}&token=${token}`;
         setMediaViewer({ isOpen: true, url, filename: file.name, type: fileInfo.type, isBlob: false });
+      } else if (fileInfo.type === 'notebook') {
+        openFile(file.path, true);
       } else if (fileInfo.type === 'code' || fileInfo.type === 'text') {
         openFile(file.path);
       } else alert(`Cannot preview ${fileInfo.type} files yet.`);
@@ -607,26 +624,43 @@ const performUpload = async (entries) => {
     } catch (err) { alert('Failed to paste: ' + err.message); }
   };
 
-  const openFile = async (filePath) => {
+  const openFile = async (filePath, asNotebook = false) => {
     try {
       const token = localStorage.getItem('vps_token');
       const res = await fetch(`/api/files/read?path=${encodeURIComponent(filePath)}`, { headers: { 'Authorization': `Bearer ${token}` }});
       const rawText = await res.text();
       const data = JSON.parse(rawText);
       if (!res.ok) throw new Error(data.error);
-      setEditorState({ isOpen: true, filePath, content: data.content || '', isSaving: false });
+      setEditorState({ isOpen: true, filePath, content: data.content || '', isSaving: false, isNotebook: asNotebook });
     } catch (err) { setError(err.message); }
   };
 
   const saveFile = async () => {
     setEditorState(prev => ({ ...prev, isSaving: true }));
     try {
-      const token = localStorage.getItem('vps_token');
-      const res = await fetch('/api/files/update', { method: 'PUT', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` }, body: JSON.stringify({ filePath: editorState.filePath, content: editorState.content }) });
-      if (!res.ok) throw new Error('Failed to save file');
+      await writeFile(editorState.filePath, editorState.content);
       alert('Saved successfully!');
     } catch (err) { alert(err.message); } finally { setEditorState(prev => ({ ...prev, isSaving: false })); }
   };
+
+  const writeFile = async (filePath, content) => {
+    const token = localStorage.getItem('vps_token');
+    const res = await fetch('/api/files/update', { method: 'PUT', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` }, body: JSON.stringify({ filePath, content }) });
+    if (!res.ok) throw new Error('Failed to save file');
+  };
+
+  if (editorState.isOpen && editorState.isNotebook) {
+    return (
+      <NotebookViewer
+        filePath={editorState.filePath}
+        initialContent={editorState.content}
+        onClose={() => setEditorState({ isOpen: false })}
+        onSave={async (content) => {
+          try { await writeFile(editorState.filePath, content); } catch (err) { alert(err.message); throw err; }
+        }}
+      />
+    );
+  }
 
   if (editorState.isOpen) {
     const lang = editorState.filePath.split('.').pop().toLowerCase();
@@ -701,10 +735,6 @@ const performUpload = async (entries) => {
           })}
         </div>
         <div className="action-buttons">
-          <button className="action-btn btn-secondary" onClick={() => setStorageBarVisible((visible) => !visible)}>
-            {storageBarVisible ? 'Hide Storage' : 'Show Storage'}
-          </button>
-
           {clipboard && <button className="action-btn" style={{ backgroundColor: '#2e7d32' }} onClick={handlePaste}>📋 Paste Here</button>}
 
           {/* Hidden File Input & Upload Button */}
@@ -715,9 +745,6 @@ const performUpload = async (entries) => {
             style={{ display: 'none' }} 
             onChange={(e) => uploadFiles(e.target.files)} 
           />
-          <button className="action-btn btn-secondary" onClick={() => fileInputRef.current.click()} disabled={isUploading}>
-            {isUploading ? 'Uploading...' : '⬆️ Upload'}
-          </button>
 
           {/* Hidden Folder Input & Upload Folder Button. webkitdirectory is
               a de-facto standard supported by all major browsers; it makes
@@ -733,13 +760,24 @@ const performUpload = async (entries) => {
             style={{ display: 'none' }} 
             onChange={(e) => uploadFiles(e.target.files)} 
           />
-          <button className="action-btn btn-secondary" onClick={() => folderInputRef.current.click()} disabled={isUploading}>
-            {isUploading ? 'Uploading...' : '📁 Upload Folder'}
-          </button>
+          <DropdownButton
+            label={isUploading ? 'Uploading...' : '⬆️ Upload'}
+            disabled={isUploading}
+            items={[
+              { icon: '📄', label: 'Upload files', onClick: () => fileInputRef.current.click() },
+              { icon: '📁', label: 'Upload folder', onClick: () => folderInputRef.current.click() },
+            ]}
+          />
 
-          <button className="action-btn btn-secondary" onClick={() => setUsersModalOpen(true)}>👥 Users</button>
-          <button className="action-btn" onClick={() => setModal({ isOpen: true, type: 'folder', input: '' })}>+ Folder</button>
-          <button className="action-btn" onClick={() => setModal({ isOpen: true, type: 'text', input: '' })}>+ File</button>
+          <DropdownButton
+            label="+ Add"
+            className="action-btn"
+            items={[
+              { icon: '📁', label: 'New folder', onClick: () => setModal({ isOpen: true, type: 'folder', input: '' }) },
+              { icon: '📄', label: 'New text file', onClick: () => setModal({ isOpen: true, type: 'text', input: '' }) },
+              { icon: '📓', label: 'New notebook', onClick: () => setModal({ isOpen: true, type: 'notebook', input: '' }) },
+            ]}
+          />
         </div>
       </div>
 
@@ -846,7 +884,7 @@ const performUpload = async (entries) => {
       {modal.isOpen && (
         <div className="modal-overlay">
           <div className="modal-content">
-            <h3>{modal.type === 'rename' ? 'Rename Item' : `Create New ${modal.type}`}</h3>
+            <h3>{modal.type === 'rename' ? 'Rename Item' : `Create New ${{ folder: 'Folder', text: 'Text File', notebook: 'Notebook' }[modal.type] || ''}`}</h3>
             {modal.error && <div className="error-message">{modal.error}</div>}
             <form onSubmit={handleModalSubmit}>
               <input autoFocus type="text" value={modal.input} onChange={(e) => setModal({ ...modal, input: e.target.value })} />

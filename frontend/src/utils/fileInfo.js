@@ -6,6 +6,7 @@ export const getFileInfo = (filename) => {
   if (['mp4', 'webm', 'mkv', 'avi'].includes(ext)) return { type: 'video', icon: '🎬' };
   if (['mp3', 'wav', 'ogg'].includes(ext)) return { type: 'audio', icon: '🎵' };
   if (['zip', 'rar', 'tar', 'gz', '7z'].includes(ext)) return { type: 'archive', icon: '📦' };
+  if (ext === 'ipynb') return { type: 'notebook', icon: '📓' };
   if (['pdf'].includes(ext)) return { type: 'pdf', icon: '📕' };
   if (['js', 'jsx', 'ts', 'tsx', 'py', 'json', 'html', 'css', 'lua'].includes(ext)) return { type: 'code', icon: '📝' };
   return { type: 'text', icon: '📄' };
